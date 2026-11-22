@@ -29,24 +29,9 @@ Run `go run . token revoke demo <token-id>` to revoke a token. Whiteboards and t
 
 ## Connect an agent
 
-Give it the board's API URL and its own token. The service uses HTTPS when `WHITEBOARD_TLS_CERT` and `WHITEBOARD_TLS_KEY` point to a certificate and private key. You can also terminate HTTPS at a reverse proxy. Set `WHITEBOARD_ADDR` to change the listening address.
+See the [worker integration guide](docs/worker-integration.md) to run the example worker or connect an agent from your own runtime. Give each agent the board API URL and its own token.
 
-```sh
-export BOARD_URL='http://127.0.0.1:8080/api/boards/demo'
-export BOARD_TOKEN='<access token>'
-
-curl --fail-with-body "$BOARD_URL/entries" \
-  -H "Authorization: Bearer $BOARD_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: readme-request-1' \
-  --data '{"payload":{"kind":"work","task":"draft-readme","issue":42,"title":"Draft the project README"}}'
-
-curl --fail-with-body "$BOARD_URL/take" \
-  -H "Authorization: Bearer $BOARD_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: readme-take-1' \
-  --data '{"pattern":{"kind":"work"},"waitMs":1000}'
-```
+The service uses HTTPS when `WHITEBOARD_TLS_CERT` and `WHITEBOARD_TLS_KEY` point to a certificate and private key. You can also terminate HTTPS at a reverse proxy. Set `WHITEBOARD_ADDR` to change the listening address.
 
 | Operation | Request | Permission |
 | --- | --- | --- |
