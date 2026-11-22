@@ -1,3 +1,6 @@
+import { parseExactJSON } from '../../shared/exact-json.mjs';
+export { numberText } from '../../shared/exact-json.mjs';
+
 export type Permission = 'post' | 'read' | 'take';
 export type Payload = Record<string, unknown>;
 
@@ -49,29 +52,6 @@ export function jsonObject(input: string): string {
     throw new Error('Enter a JSON object enclosed in braces.');
   }
   return input.trim();
-}
-
-interface RawNumber { readonly rawJSON: string }
-
-const losslessJSON = JSON as JSON & {
-  rawJSON?: (source: string) => RawNumber;
-  isRawJSON?: (value: unknown) => value is RawNumber;
-};
-
-export function numberText(value: unknown): string {
-  return losslessJSON.isRawJSON?.(value) ? value.rawJSON : '';
-}
-
-function parseResponse(text: string): unknown {
-  const rawJSON = losslessJSON.rawJSON;
-  return JSON.parse(text, (_key: string, value: unknown, context?: { source?: string }) => {
-    if (typeof value !== 'number') return value;
-    // PostgreSQL numbers can exceed JavaScript's precision, including in recovered entries.
-    if (!rawJSON || !losslessJSON.isRawJSON || context?.source === undefined) {
-      throw new Error('This browser cannot open whiteboards with exact JSON numbers. Update your browser and try again.');
-    }
-    return rawJSON(context.source);
-  });
 }
 
 export class BoardAPI {
@@ -173,6 +153,9 @@ export class BoardAPI {
       const error = await response.json().catch(() => ({})) as { code?: string; message?: string };
       throw new APIError(response.status, error.code, error.message || fallback);
     }
-    return parseResponse(await response.text()) as T;
+    return parseExactJSON(
+      await response.text(),
+      'This browser cannot open whiteboards with exact JSON numbers. Update your browser and try again.',
+    ) as T;
   }
 }

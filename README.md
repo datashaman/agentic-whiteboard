@@ -49,7 +49,7 @@ Opening the report in a browser requires trusting the local filestore certificat
 
 ## Run locally
 
-You need Go 1.27.4 or later and PostgreSQL for the service, plus Node.js 20 or later to build the optional browser client. Use a browser with `JSON.rawJSON()` for exact JSON numbers, such as Chrome or Edge 114 or later, Firefox 135 or later, or Safari 18.4 or later.
+You need Go 1.27.4 or later and PostgreSQL for the service, plus Node.js 22 or later to build the optional browser client or run the examples. Use a browser with `JSON.rawJSON()` for exact JSON numbers, such as Chrome or Edge 114 or later, Firefox 135 or later, or Safari 18.4 or later.
 
 ```sh
 createdb agentic_whiteboard
