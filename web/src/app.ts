@@ -1,34 +1,14 @@
 import {
   APIError, BoardAPI, jsonObject,
-  type Board, type BoardEvent, type Entry, type Payload, type Permission,
+  type BoardEvent, type Entry, type Payload, type Permission,
 } from './api';
-import {
-  collectTaskIssues, issueLabel, issueOf, matchesTask, relatedIssue, taskCards,
-  type TaskIssues, type TaskRef,
-} from './tasks';
-
-type View = 'tasks' | 'entries' | 'activity';
-type TaskFilter = 'open' | 'result';
-type ActivityFocus = { entryId: string; operation: BoardEvent['operation'] };
+import { BoardView, type ActivityFocus, type View, type ViewAction } from './board-view';
+import { issueLabel, issueOf } from './tasks';
 
 interface Session {
   api: BoardAPI;
-  board: Board;
-  view: View;
-  taskFilter: TaskFilter;
-  issue: string;
-  task?: TaskRef;
-  pattern: string;
-  entries: Entry[];
-  events: BoardEvent[];
-  taskEvents: BoardEvent[];
-  issues: unknown[];
-  taskIssues: TaskIssues;
-  pages: string[];
-  nextCursor?: string;
+  view: BoardView;
   disclosure?: AbortController;
-  refresh?: AbortController;
-  loaded: boolean;
   mutating: boolean;
 }
 
@@ -119,7 +99,7 @@ function saveConnection(connection?: BoardConnection) {
 }
 
 function has(session: Session, permission: Permission) {
-  return session.board.permissions.includes(permission) && (permission === 'read' || !session.board.archived);
+  return session.view.can(permission);
 }
 
 function announce(success = '', failure = '') {
@@ -128,7 +108,7 @@ function announce(success = '', failure = '') {
 }
 
 function disconnect(reason = '') {
-  active?.refresh?.abort();
+  active?.view.cancel();
   active?.disclosure?.abort();
   saveConnection();
   active = undefined;
@@ -165,23 +145,16 @@ function report(session: Session, error: unknown, target = boardError) {
 }
 
 function refreshIssueOptions(session: Session) {
-  const values = new Set<string>(session.issue ? [session.issue] : []);
-  for (const value of session.issues) values.add(issueOf({ issue: value }));
+  const selected = session.view.current.issue;
+  const values = new Set(session.view.issues);
+  values.add(selected);
   values.delete('');
   issue.replaceChildren(
     new Option('All issues', ''),
     ...Array.from(values).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
       .map(value => new Option(issueLabel(value), value)),
   );
-  issue.value = session.issue;
-}
-
-function matchesIssue(payload: Payload, issue: string, taskIssues: TaskIssues) {
-  return issue === '' || relatedIssue(payload, taskIssues) === issue;
-}
-
-function inIssue(session: Session, entry: Entry) {
-  return matchesIssue(entry.payload, session.issue, session.taskIssues);
+  issue.value = selected;
 }
 
 function titleOf(entry: Entry): string {
@@ -196,23 +169,24 @@ function tag(text: string, isIssue = false) {
 }
 
 function renderTasks(session: Session) {
-  const visible = session.view === 'tasks';
-  const cards = visible && session.loaded ? taskCards(session.taskEvents, session.taskIssues) : [];
-  tasks.dataset.filter = session.taskFilter;
+  const { current, data, loading } = session.view;
+  const visible = current.view === 'tasks';
+  const cards = data?.cards ?? [];
+  tasks.dataset.filter = current.filter;
   for (const filter of taskFilters) {
-    filter.setAttribute('aria-pressed', String(filter.dataset.taskFilter === session.taskFilter));
+    filter.setAttribute('aria-pressed', String(filter.dataset.taskFilter === current.filter));
   }
   for (const lane of lanes) {
     const container = lane.querySelector('.cards')!;
     const count = lane.querySelector('.count')!;
     container.replaceChildren();
-    lane.hidden = (lane.dataset.lane === 'result') !== (session.taskFilter === 'result');
+    lane.hidden = (lane.dataset.lane === 'result') !== (current.filter === 'result');
     if (!visible || lane.hidden) continue;
-    const matches = cards.filter(card => card.lane === lane.dataset.lane && inIssue(session, card.entry));
+    const matches = cards.filter(card => card.lane === lane.dataset.lane && (!current.issue || card.ref.issue === current.issue));
     count.textContent = String(matches.length);
     count.setAttribute('aria-label', matches.length + ' tasks');
     if (!matches.length) {
-      const empty = session.loaded ? 'No tasks' : session.refresh ? 'Loading tasks…' : 'Tasks unavailable';
+      const empty = data ? 'No tasks' : loading ? 'Loading tasks…' : 'Tasks unavailable';
       container.append(node('p', 'empty', empty));
     }
     for (const card of matches) {
@@ -221,9 +195,8 @@ function renderTasks(session: Session) {
           void focusActivity(session, { entryId: card.entry.id, operation: 'take' });
           return;
         }
-        session.task = card.ref;
-        session.pattern = pattern.value = '{}';
-        void showView(session, 'entries', true);
+        pattern.value = '{}';
+        void navigate(session, { type: 'view', view: 'entries', task: card.ref });
         viewButtons.find(item => item.dataset.view === 'entries')?.focus();
       }, 'task-card');
       const title = titleOf(card.entry);
@@ -281,6 +254,7 @@ function record(session: Session, entry: Entry, openId: string | undefined,
   details.dataset.id = event?.id ?? entry.id;
   details.name = event ? 'activity-record' : 'live-record';
   const summary = node('summary');
+  if (event) summary.onclick = () => session.view.dismissFocus();
   const label = node('span', 'summary-label');
   if (event) {
     label.append(
@@ -362,24 +336,22 @@ function record(session: Session, entry: Entry, openId: string | undefined,
   return details;
 }
 
-function renderRecords(session: Session, focus?: ActivityFocus) {
-  const list = session.view === 'activity' ? eventList : entryList;
+function renderRecords(session: Session) {
+  const { current, data, loading, focusedRecord } = session.view;
+  const list = current.view === 'activity' ? eventList : entryList;
   const restoreFocus = list.contains(document.activeElement);
   const openId = list.querySelector<HTMLElement>('details[open]')?.dataset.id;
   session.disclosure?.abort();
   entryList.replaceChildren();
   eventList.replaceChildren();
-  if (session.view === 'tasks' || !has(session, 'read')) return;
+  if (current.view === 'tasks' || !has(session, 'read')) return;
 
-  if (!session.loaded) {
-    list.append(node('p', 'empty', session.refresh ? 'Loading entries…' : 'Entries unavailable'));
-    return;
-  }
-
-  if (session.view === 'activity') {
-    const selected = focus ? session.events.find(event =>
-      event.operation === focus.operation && event.entry.id === focus.entryId)?.id : openId;
-    const events = session.events.filter(event => inIssue(session, event.entry) || (focus && event.id === selected));
+  if (!data) {
+    list.append(node('p', 'empty', loading ? 'Loading entries…' : 'Entries unavailable'));
+  } else if (current.view === 'activity') {
+    const selected = focusedRecord?.id ?? openId;
+    const events = focusedRecord && !data.events.some(event => event.id === focusedRecord.id)
+      ? [focusedRecord, ...data.events] : data.events;
     for (const event of events) {
       const action = event.operation === 'take' && has(session, 'post')
         ? () => button('Repost', control => void repost(session, event.entry.id, control))
@@ -388,9 +360,7 @@ function renderRecords(session: Session, focus?: ActivityFocus) {
     }
     if (!events.length) list.append(node('p', 'empty', 'No activity for this selection on this page.'));
   } else {
-    const entries = session.entries.filter(entry =>
-      inIssue(session, entry) && (!session.task || matchesTask(entry.payload, session.task, session.taskIssues)),
-    );
+    const entries = data.entries;
     for (const entry of entries) {
       const action = has(session, 'take')
         ? () => button('Take', control => void take(session, entry.id, control))
@@ -400,25 +370,24 @@ function renderRecords(session: Session, focus?: ActivityFocus) {
     if (!entries.length) list.append(node('p', 'empty', 'No live entries match this selection on this page.'));
   }
 
-  if (session.pages.length || session.nextCursor) {
+  if (current.pages.length || data?.nextCursor) {
     const pages = node('div', 'record-pages');
-    const previous = button('Previous page', () => void refresh(session, undefined, session.pages.slice(0, -1)));
-    previous.disabled = Boolean(session.refresh) || !session.pages.length;
-    const next = button('Next page', () => {
-      if (session.nextCursor) void refresh(session, undefined, [...session.pages, session.nextCursor]);
-    });
-    next.disabled = Boolean(session.refresh) || !session.nextCursor;
-    pages.append(previous, node('span', '', 'Page ' + (session.pages.length + 1)), next);
+    const previous = button('Previous page', () => void navigate(session, { type: 'page', direction: 'previous' }));
+    previous.disabled = loading || !current.pages.length;
+    const next = button('Next page', () => void navigate(session, { type: 'page', direction: 'next' }));
+    next.disabled = loading || !data?.nextCursor;
+    pages.append(previous, node('span', '', 'Page ' + (current.pages.length + 1)), next);
     list.append(pages);
   }
-  if (restoreFocus || focus) list.querySelector<HTMLElement>('details[open] > summary')?.focus();
+  if (restoreFocus) list.querySelector<HTMLElement>('details[open] > summary')?.focus();
 }
 
-function render(session: Session, focus?: ActivityFocus) {
+function render(session: Session) {
+  const { current, board, loading } = session.view;
   const read = has(session, 'read');
-  const view = read || has(session, 'take') ? session.view : undefined;
-  archivedBanner.hidden = !session.board.archived;
-  if (session.board.archived && composer.open) {
+  const view = read || has(session, 'take') ? current.view : undefined;
+  archivedBanner.hidden = !board.archived;
+  if (board.archived && composer.open) {
     composer.close();
     boardName.focus();
   }
@@ -429,89 +398,40 @@ function render(session: Session, focus?: ActivityFocus) {
     element(item.dataset.view!).hidden = item.dataset.view !== view;
   }
   element('issue-filter').hidden = !read;
-  element('post-access').hidden = Boolean(view) || session.board.archived;
+  element('post-access').hidden = Boolean(view) || board.archived;
   element('browse-form').hidden = !read;
   element('take-form').hidden = read || !has(session, 'take');
-  element('task-scope').hidden = !session.task;
-  element('task-scope-id').textContent = session.task?.id ?? '';
+  element('task-scope').hidden = !current.task;
+  element('task-scope-id').textContent = current.task?.id ?? '';
   postButton.hidden = !has(session, 'post');
+  refreshButton.disabled = loading;
+  browseButton.disabled = loading;
+  if (loading) workspace.setAttribute('aria-busy', 'true');
+  else workspace.removeAttribute('aria-busy');
+  refreshIssueOptions(session);
   renderTasks(session);
-  renderRecords(session, focus);
+  renderRecords(session);
 }
 
-function showView(session: Session, view: View, keepTask = false, focus?: ActivityFocus) {
-  session.view = view;
-  if (!keepTask) session.task = undefined;
-  announce();
-  session.loaded = false;
-  const pending = refresh(session, focus);
-  render(session);
-  return pending;
+async function navigate(session: Session, action: ViewAction) {
+  if (session.view.select(action)) await refresh(session);
+  else if (active === session) render(session);
 }
 
-function focusActivity(session: Session, focus: ActivityFocus) {
-  return showView(session, 'activity', false, focus);
+async function focusActivity(session: Session, focus: ActivityFocus) {
+  await navigate(session, { type: 'focus', focus });
+  if (active === session && session.view.current.focus === focus && session.view.focusedRecord) {
+    eventList.querySelector<HTMLElement>('details[open] > summary')?.focus();
+  }
 }
 
-async function refresh(session: Session, focus?: ActivityFocus, pages: string[] = []) {
-  session.refresh?.abort();
-  const request = new AbortController();
-  session.refresh = request;
-  refreshButton.disabled = true;
-  browseButton.disabled = true;
-  workspace.setAttribute('aria-busy', 'true');
-  const view = session.view;
-  const cursor = pages.at(-1);
-  const selectedIssue = session.issue;
-  const selectedTask = session.task;
-  const requestedPattern = session.pattern;
+async function refresh(session: Session) {
   try {
-    const canRead = has(session, 'read');
-    let [board, overview, live, history, focused] = await Promise.all([
-      session.api.board(request.signal),
-      canRead ? session.api.overview(view === 'tasks', request.signal) : undefined,
-      canRead && view === 'entries' ? session.api.browse(requestedPattern, request.signal, cursor) : undefined,
-      canRead && view === 'activity' ? session.api.history(request.signal, cursor) : undefined,
-      canRead && focus ? session.api.history(request.signal, undefined, focus.entryId) : undefined,
-    ]);
-    if (active !== session || request.signal.aborted) return;
-    session.board = board;
-    if (overview) {
-      const taskIssues = collectTaskIssues(overview.events);
-      // A scoped view can skip pages of unrelated summaries.
-      if (selectedIssue || selectedTask) {
-        const accepts = ({ payload }: Entry) => matchesIssue(payload, selectedIssue, taskIssues)
-          && (!selectedTask || matchesTask(payload, selectedTask, taskIssues));
-        while (live?.nextCursor && !live.entries.some(accepts)) {
-          live = await session.api.browse(requestedPattern, request.signal, live.nextCursor);
-        }
-        while (!focus && history?.nextCursor && !history.events.some(event => accepts(event.entry))) {
-          history = await session.api.history(request.signal, history.nextCursor);
-        }
-      }
-      if (active !== session || request.signal.aborted) return;
-      session.events = history?.events ?? [];
-      const target = focused?.events.find(event => event.operation === focus?.operation);
-      if (target && !session.events.some(event => event.id === target.id)) session.events.unshift(target);
-      session.entries = live?.entries ?? [];
-      session.taskEvents = overview.events;
-      session.issues = overview.issues;
-      session.taskIssues = taskIssues;
-      session.pages = pages;
-      session.nextCursor = live?.nextCursor ?? history?.nextCursor;
-      refreshIssueOptions(session);
-    }
-    session.loaded = true;
+    await session.view.refresh(() => {
+      if (active === session) render(session);
+    });
   } catch (error) {
-    if (!request.signal.aborted) report(session, error);
-  } finally {
-    if (active === session && session.refresh === request) {
-      session.refresh = undefined;
-      refreshButton.disabled = false;
-      browseButton.disabled = false;
-      workspace.removeAttribute('aria-busy');
-      render(session, focus);
-    }
+    report(session, error);
   }
 }
 
@@ -538,7 +458,7 @@ async function take(session: Session, entryId: string, control: HTMLButtonElemen
       if (error instanceof APIError && error.code === 'already_taken' && has(session, 'read')) {
         await focusActivity(session, { entryId, operation: 'take' });
         if (active !== session) return;
-        const event = session.events.find(item => item.operation === 'take' && item.entry.id === entryId);
+        const event = session.view.focusedRecord;
         announce(event ? 'Entry ' + entryId + ' was already taken by ' + event.actor + '.' : error.message);
       } else {
         report(session, error);
@@ -560,7 +480,8 @@ async function repost(session: Session, entryId: string, control: HTMLButtonElem
       const entry = await session.api.repost(entryId);
       if (active !== session) return;
       announce('Reposted entry ' + entryId + ' as entry ' + entry.id + '.');
-      await refresh(session, session.view === 'activity' ? { entryId: entry.id, operation: 'post' } : undefined);
+      if (session.view.current.view === 'activity') await focusActivity(session, { entryId: entry.id, operation: 'post' });
+      else await refresh(session);
     } catch (error) {
       report(session, error);
     }
@@ -582,12 +503,7 @@ async function connect({ slug, token }: BoardConnection) {
   try {
     const api = new BoardAPI(slug, token);
     const board = await api.board();
-    const session: Session = {
-      api, board, view: board.permissions.includes('read') ? 'tasks' : 'entries', taskFilter: 'open',
-      issue: '', pattern: '{}', entries: [], events: [], taskEvents: [], issues: [],
-      taskIssues: collectTaskIssues([]), pages: [],
-      loaded: false, mutating: false,
-    };
+    const session: Session = { api, view: new BoardView(api, board), mutating: false };
     history.replaceState(null, '', '/boards/' + encodeURIComponent(board.id));
     saveConnection({ slug: board.id, token });
     tokenInput.value = '';
@@ -596,14 +512,12 @@ async function connect({ slug, token }: BoardConnection) {
     element('board-path').textContent = '/boards/' + board.id;
     const actor = element('actor');
     actor.textContent = actor.title = board.actor;
-    pattern.value = session.pattern;
+    pattern.value = session.view.current.pattern;
     active = session;
-    refreshIssueOptions(session);
     login.hidden = true;
     workspace.hidden = false;
     sessionBar.hidden = false;
     void refresh(session);
-    render(session);
     boardName.focus();
   } catch (error) {
     if (error instanceof APIError && error.status === 401) {
@@ -638,26 +552,25 @@ refreshButton.onclick = () => {
 };
 for (const item of viewButtons) {
   item.onclick = () => {
-    if (active) showView(active, item.dataset.view as View);
+    if (!active) return;
+    announce();
+    void navigate(active, { type: 'view', view: item.dataset.view as View });
   };
 }
 for (const filter of taskFilters) {
   filter.onclick = () => {
     if (!active) return;
-    active.taskFilter = filter.dataset.taskFilter as TaskFilter;
-    renderTasks(active);
+    const value = filter.dataset.taskFilter === 'result' ? 'result' : 'open';
+    void navigate(active, { type: 'filter', filter: value });
   };
 }
 issue.onchange = () => {
-  if (!active) return;
-  active.issue = issue.value;
-  if (active.task && active.issue && active.task.issue !== active.issue) active.task = undefined;
-  if (active.view === 'tasks') render(active);
-  else void refresh(active);
+  if (active) void navigate(active, { type: 'issue', issue: issue.value });
 };
 element('clear-task').onclick = () => {
   if (active) {
-    showView(active, 'entries');
+    announce();
+    void navigate(active, { type: 'view', view: 'entries' });
     pattern.focus();
   }
 };
@@ -666,8 +579,7 @@ element<HTMLFormElement>('browse-form').onsubmit = event => {
   if (!active || !has(active, 'read')) return;
   announce();
   try {
-    active.pattern = jsonObject(pattern.value || '{}');
-    void refresh(active);
+    void navigate(active, { type: 'pattern', pattern: jsonObject(pattern.value || '{}') });
   } catch (error) {
     report(active, error);
   }

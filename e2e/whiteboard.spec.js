@@ -248,6 +248,8 @@ test("paged records load JSON on demand and a lost post reply survives reload", 
   await expect(page.getByRole("status").filter({ hasText: "Reposted entry" })).toBeVisible();
   await activity.getByRole("button", { name: "View original take (entry " + original.id + ")" }).click();
   await expect(record.getByLabel("Entry JSON")).toContainText("Preserve full JSON");
+  await button("Refresh").click();
+  await expect(record.getByLabel("Entry JSON")).toContainText("Preserve full JSON");
   await record.getByRole("button", { name: /View latest repost/ }).click();
   await expect(activity.getByRole("button", { name: "View original take (entry " + original.id + ")" })).toBeVisible();
 
@@ -281,6 +283,9 @@ test("paged records load JSON on demand and a lost post reply survives reload", 
   await expect(entries.getByText("Note 51", { exact: true })).toHaveCount(0);
   await button("Next page").click();
   await expect(entries.getByText("Note 51", { exact: true })).toBeVisible();
+  await button("Refresh").click();
+  await expect(entries.getByText("Note 51", { exact: true })).toBeVisible();
+  await expect(entries.getByText("Page 2", { exact: true })).toBeVisible();
   await button("Previous page").click();
   await expect(entries.getByText("Note 1", { exact: true })).toBeVisible();
 });

@@ -55,7 +55,9 @@ jobs:
           npm --prefix e2e ci
           npm --prefix e2e exec -- playwright install --with-deps chromium
       - name: Test browser and private file handoff
-        run: npm --prefix e2e test
+        run: |
+          npm --prefix web test
+          npm --prefix e2e test
       - name: Validate Compose
         env:
           POSTGRES_PASSWORD: test
