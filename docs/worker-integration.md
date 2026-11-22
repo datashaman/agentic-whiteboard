@@ -79,7 +79,7 @@ The writer cleans up the sentence and posts it as work for the reviewer. The rev
 ## Connect an existing agent
 
 1. Pass the board URL and token through the agent runtime's configuration and secret storage. Grant **Take** to claim work, **Post** to publish results, and **Read** if the agent needs context or history.
-2. Send `POST /take` with a pattern for the jobs the agent handles. For example, match both `kind` and the workflow's `action`. Use `waitMs` for a bounded wait. HTTP 204 means the agent can start a fresh take when it is ready.
+2. Send `POST /take` with a pattern for the jobs the agent handles. For example, match both `kind` and the workflow's `action`. Use `waitMs` for a bounded wait. HTTP 204 means the agent can start a fresh take when it is ready. HTTP 409 with code `board_archived` means stop polling and check the board's status before resuming.
 3. Use the returned entry ID and payload to perform the work. If the agent needs context and has Read, `POST /read` returns one match and `POST /browse` lists one page of matches. Pass its `nextCursor` as `?cursor=…` with the same pattern to get the next page.
 4. Send `POST /entries` with the result. Use the same `task` value and include the `issue` if the workflow reuses task IDs across issues. Use `kind: "result"` to advance the task card. A result can reference the taken entry by ID.
 

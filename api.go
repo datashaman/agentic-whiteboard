@@ -16,11 +16,13 @@ import (
 )
 
 type boardAccess struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Actor       string   `json:"actor"`
-	Permissions []string `json:"permissions"`
-	tokenID     int64
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	Actor             string   `json:"actor"`
+	Permissions       []string `json:"permissions"`
+	Archived          bool     `json:"archived"`
+	tokenID           int64
+	archiveGeneration int64
 }
 
 type api struct {
@@ -92,6 +94,23 @@ func (e *apiError) Error() string { return e.Message }
 
 var unauthorized = &apiError{http.StatusUnauthorized, "unauthorized", "a valid bearer token for this board is required"}
 
+var boardArchived = &apiError{http.StatusConflict, "board_archived", "Board archived. Check its status before retrying."}
+
+const boardState = "SELECT archived, archive_generation FROM boards WHERE slug = $1"
+
+func (access boardAccess) checkArchive(row pgx.Row) error {
+	var archived bool
+	var generation int64
+	if err := row.Scan(&archived, &generation); err != nil {
+		return err
+	}
+	// A waiting Take must observe even an archive followed by a quick reopen.
+	if access.Archived || archived || generation != access.archiveGeneration {
+		return boardArchived
+	}
+	return nil
+}
+
 func (a *api) authenticate(ctx context.Context, slug, authorization string) (boardAccess, error) {
 	var access boardAccess
 	header := strings.Fields(authorization)
@@ -100,10 +119,11 @@ func (a *api) authenticate(ctx context.Context, slug, authorization string) (boa
 	}
 	digest := sha256.Sum256([]byte(header[1]))
 	err := a.db.QueryRow(ctx, `
-		SELECT b.slug, b.name, t.actor, t.permissions, t.id
+		SELECT b.slug, b.name, t.actor, t.permissions, b.archived, t.id, b.archive_generation
 		FROM tokens t JOIN boards b ON b.slug = t.board
 		WHERE t.board = $1 AND t.digest = $2 AND t.revoked_at IS NULL
-	`, slug, digest[:]).Scan(&access.ID, &access.Name, &access.Actor, &access.Permissions, &access.tokenID)
+	`, slug, digest[:]).Scan(&access.ID, &access.Name, &access.Actor, &access.Permissions, &access.Archived,
+		&access.tokenID, &access.archiveGeneration)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = unauthorized
 	}

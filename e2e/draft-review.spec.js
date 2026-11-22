@@ -49,6 +49,7 @@ test("the draft writer can stop after Take and hand off a recovered draft to the
   await run("writer");
   await run("reviewer");
   await button("Tasks").click();
+  await button("Result posted").click();
   await expect(region("Result posted").getByRole("button", { name: "Review the revised draft" })).toBeVisible();
 
   const history = await request.get(api + "/history", { headers: { Authorization: "Bearer " + token } });

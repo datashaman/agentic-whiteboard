@@ -3,6 +3,9 @@ CREATE TABLE IF NOT EXISTS boards (
     name text NOT NULL
 );
 
+ALTER TABLE boards ADD COLUMN IF NOT EXISTS archived boolean NOT NULL DEFAULT false;
+ALTER TABLE boards ADD COLUMN IF NOT EXISTS archive_generation bigint NOT NULL DEFAULT 0;
+
 CREATE TABLE IF NOT EXISTS tokens (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     board text NOT NULL REFERENCES boards(slug),

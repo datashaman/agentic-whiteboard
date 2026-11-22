@@ -171,10 +171,13 @@ test("a maintainer follows two tasks on one issue through agent handoff and reco
       await mutate("entries", result("42.0"), 201);
       await refresh();
       await expect(issue).toHaveValue(String(work.issue));
-      await expect(card("Result posted", work.title)).toBeVisible();
-      await expect(card("Result posted", sibling.title)).toHaveCount(0);
       await expect(card("Available", sibling.title)).toBeVisible();
       await expect(card("Taken", work.title)).toHaveCount(0);
+      await expect(region("Result posted")).toBeHidden();
+      await button("Result posted").click();
+      await expect(card("Result posted", work.title)).toBeVisible();
+      await expect(card("Result posted", sibling.title)).toHaveCount(0);
+      await expect(region("Available")).toBeHidden();
       await expect(issue.getByRole("option", { name: "42.0", exact: true })).toHaveCount(0);
     });
 

@@ -66,9 +66,18 @@ WHITEBOARD_WEB_DIR=web/dist go run . serve
 
 Set `DATABASE_URL` to the connection URL for your PostgreSQL instance. The token command prints the access token and its ID. Save the token to connect and keep the ID for revocation.
 
-Open `http://127.0.0.1:8080/boards/demo` and paste the access token. Tasks groups work by its workflow-defined task ID. Open a Taken card to see who took the work and when. With Read and Post access, Repost makes a fresh copy and Activity links it to the original take.
+Open `http://127.0.0.1:8080/boards/demo` and paste the access token. Tasks groups work by its workflow-defined task ID. **Open work** shows available and taken entries. Switch to **Result posted** to browse tasks with results. Open a Taken card to see who took the work and when. With Read and Post access, Repost makes a fresh copy and Activity links it to the original take.
 
 Run `go run . token revoke demo <token-id>` to revoke a token. Whiteboards and their permissions are independent, so issue tokens for each board an agent needs.
+
+### Archive or reopen a board
+
+```sh
+go run . board archive demo
+go run . board reopen demo
+```
+
+With Compose, use `docker compose exec whiteboard whiteboard board archive demo` and `docker compose exec whiteboard whiteboard board reopen demo`. An archived board is read-only at its existing URL. Entries, history, recovery links, and read access remain available. Reopening makes available entries claimable again. Taken entries can still be reposted explicitly.
 
 ## Connect an agent
 
@@ -96,6 +105,8 @@ Patterns match the specified top-level fields by JSON value. An empty pattern ma
 Browse and History return up to 50 records per page. If the response has a `nextCursor`, pass it as the `cursor` query parameter with the same Browse pattern or History selection to fetch the next page. Pass `summary=1` to list only the fields the browser uses for titles and task navigation. Open a record to fetch its full JSON.
 
 Repost copies the stored JSON exactly and returns the new entry with HTTP 201. History reports `repostedFrom` on the replacement's Post and `latestRepost` on the original Take. Both fields are entry IDs.
+
+Board details include an `archived` boolean. On an archived board, new Post, Take, and Repost requests return HTTP 409 with code `board_archived`. A Take already waiting returns the same code when the board is archived. Reusing the key and input of a previously committed mutation still returns its recorded result.
 
 ## Run the tests
 
