@@ -8,6 +8,7 @@ import {
 } from './tasks';
 
 type View = 'tasks' | 'entries' | 'activity';
+type ActivityFocus = { entryId: string; operation: BoardEvent['operation'] };
 
 interface Session {
   api: BoardAPI;
@@ -177,6 +178,10 @@ function renderTasks(session: Session) {
     }
     for (const card of matches) {
       const control = button('', () => {
+        if (card.takenAt) {
+          void focusActivity(session, { entryId: card.entry.id, operation: 'take' });
+          return;
+        }
         session.task = card.ref;
         session.pattern = pattern.value = '{}';
         void showView(session, 'entries', true);
@@ -187,7 +192,9 @@ function renderTasks(session: Session) {
       const keys = node('span', 'task-key');
       if (card.ref.issue) keys.append(tag(issueLabel(card.ref.issue), true));
       keys.append(tag(card.ref.id));
-      control.append(keys, node('strong', '', title), node('span', 'attribution', card.attribution));
+      const attribution = node('span', 'attribution', card.attribution);
+      if (card.takenAt) attribution.append(' · ', timestamp(card.takenAt));
+      control.append(keys, node('strong', '', title), attribution);
       container.append(control);
     }
   }
@@ -230,7 +237,7 @@ function renderPayload(raw: HTMLElement, links: HTMLElement, payload: Payload) {
 }
 
 function record(session: Session, entry: Entry, openId: string | undefined,
-  action?: (full: Entry) => HTMLButtonElement, event?: BoardEvent) {
+  action?: () => HTMLButtonElement, event?: BoardEvent) {
   const details = node('details', 'record');
   details.dataset.id = event?.id ?? entry.id;
   details.name = event ? 'activity-record' : 'live-record';
@@ -260,7 +267,17 @@ function record(session: Session, entry: Entry, openId: string | undefined,
     const links = node('ul', 'entry-links');
     renderPayload(raw, links, payload.payload);
     body.replaceChildren(raw, links);
-    if (action) body.append(action(payload));
+    if (event?.repostedFrom) {
+      const entryId = event.repostedFrom;
+      body.append(button('View original take (entry ' + entryId + ')',
+        () => void focusActivity(session, { entryId, operation: 'take' })));
+    }
+    if (event?.latestRepost) {
+      const entryId = event.latestRepost;
+      body.append(button('View latest repost (entry ' + entryId + ')',
+        () => void focusActivity(session, { entryId, operation: 'post' })));
+    }
+    if (action) body.append(action());
   }
   function syncDisclosure() {
     if (!details.open) {
@@ -297,7 +314,7 @@ function record(session: Session, entry: Entry, openId: string | undefined,
   return details;
 }
 
-function renderRecords(session: Session, takenId?: string) {
+function renderRecords(session: Session, focus?: ActivityFocus) {
   const list = session.view === 'activity' ? eventList : entryList;
   const restoreFocus = list.contains(document.activeElement);
   const openId = list.querySelector<HTMLElement>('details[open]')?.dataset.id;
@@ -312,12 +329,12 @@ function renderRecords(session: Session, takenId?: string) {
   }
 
   if (session.view === 'activity') {
-    const events = session.events.filter(event => inIssue(session, event.entry) ||
-      (event.operation === 'take' && event.entry.id === takenId));
-    const selected = takenId ? events.find(event => event.operation === 'take' && event.entry.id === takenId)?.id : openId;
+    const selected = focus ? session.events.find(event =>
+      event.operation === focus.operation && event.entry.id === focus.entryId)?.id : openId;
+    const events = session.events.filter(event => inIssue(session, event.entry) || (focus && event.id === selected));
     for (const event of events) {
       const action = event.operation === 'take' && has(session, 'post')
-        ? (full: Entry) => button('Repost', control => void repost(session, { ...event, entry: full }, control))
+        ? () => button('Repost', control => void repost(session, event.entry.id, control))
         : undefined;
       list.append(record(session, event.entry, selected, action, event));
     }
@@ -346,10 +363,10 @@ function renderRecords(session: Session, takenId?: string) {
     pages.append(previous, node('span', '', 'Page ' + (session.pages.length + 1)), next);
     list.append(pages);
   }
-  if (restoreFocus || takenId) list.querySelector<HTMLElement>('details[open] > summary')?.focus();
+  if (restoreFocus || focus) list.querySelector<HTMLElement>('details[open] > summary')?.focus();
 }
 
-function render(session: Session, takenId?: string) {
+function render(session: Session, focus?: ActivityFocus) {
   const read = has(session, 'read');
   const view = read || has(session, 'take') ? session.view : undefined;
   element('view-bar').hidden = !view;
@@ -366,20 +383,24 @@ function render(session: Session, takenId?: string) {
   element('task-scope-id').textContent = session.task?.id ?? '';
   postButton.hidden = !has(session, 'post');
   renderTasks(session);
-  renderRecords(session, takenId);
+  renderRecords(session, focus);
 }
 
-function showView(session: Session, view: View, keepTask = false) {
+function showView(session: Session, view: View, keepTask = false, focus?: ActivityFocus) {
   session.view = view;
   if (!keepTask) session.task = undefined;
   announce();
   session.loaded = false;
-  const pending = refresh(session);
+  const pending = refresh(session, focus);
   render(session);
   return pending;
 }
 
-async function refresh(session: Session, takenId?: string, pages: string[] = []) {
+function focusActivity(session: Session, focus: ActivityFocus) {
+  return showView(session, 'activity', false, focus);
+}
+
+async function refresh(session: Session, focus?: ActivityFocus, pages: string[] = []) {
   session.refresh?.abort();
   const request = new AbortController();
   session.refresh = request;
@@ -397,7 +418,7 @@ async function refresh(session: Session, takenId?: string, pages: string[] = [])
         session.api.overview(view === 'tasks', request.signal),
         view === 'entries' ? session.api.browse(requestedPattern, request.signal, cursor) : undefined,
         view === 'activity' ? session.api.history(request.signal, cursor) : undefined,
-        takenId ? session.api.history(request.signal, undefined, takenId) : undefined,
+        focus ? session.api.history(request.signal, undefined, focus.entryId) : undefined,
       ]);
       const taskIssues = collectTaskIssues(overview.events);
       // A scoped view can skip pages of unrelated summaries.
@@ -407,14 +428,14 @@ async function refresh(session: Session, takenId?: string, pages: string[] = [])
         while (live?.nextCursor && !live.entries.some(accepts)) {
           live = await session.api.browse(requestedPattern, request.signal, live.nextCursor);
         }
-        while (!takenId && history?.nextCursor && !history.events.some(event => accepts(event.entry))) {
+        while (!focus && history?.nextCursor && !history.events.some(event => accepts(event.entry))) {
           history = await session.api.history(request.signal, history.nextCursor);
         }
       }
       if (active !== session || request.signal.aborted) return;
       session.events = history?.events ?? [];
-      const take = focused?.events.find(event => event.operation === 'take');
-      if (take && !session.events.some(event => event.id === take.id)) session.events.unshift(take);
+      const target = focused?.events.find(event => event.operation === focus?.operation);
+      if (target && !session.events.some(event => event.id === target.id)) session.events.unshift(target);
       session.entries = live?.entries ?? [];
       session.taskEvents = overview.events;
       session.issues = overview.issues;
@@ -435,7 +456,7 @@ async function refresh(session: Session, takenId?: string, pages: string[] = [])
       refreshButton.disabled = false;
       browseButton.disabled = false;
       workspace.removeAttribute('aria-busy');
-      render(session, takenId);
+      render(session, focus);
     }
   }
 }
@@ -461,9 +482,7 @@ async function take(session: Session, entryId: string, control: HTMLButtonElemen
     } catch (error) {
       if (active !== session) return;
       if (error instanceof APIError && error.code === 'already_taken' && has(session, 'read')) {
-        session.view = 'activity';
-        session.task = undefined;
-        await refresh(session, entryId);
+        await focusActivity(session, { entryId, operation: 'take' });
         if (active !== session) return;
         const event = session.events.find(item => item.operation === 'take' && item.entry.id === entryId);
         announce(event ? 'Entry ' + entryId + ' was already taken by ' + event.actor + '.' : error.message);
@@ -481,13 +500,13 @@ async function take(session: Session, entryId: string, control: HTMLButtonElemen
   });
 }
 
-async function repost(session: Session, event: BoardEvent, control: HTMLButtonElement) {
+async function repost(session: Session, entryId: string, control: HTMLButtonElement) {
   await mutate(session, control, async () => {
     try {
-      const entry = await session.api.post(JSON.stringify(event.entry.payload), 'repost:' + event.id);
+      const entry = await session.api.repost(entryId);
       if (active !== session) return;
-      announce('Reposted entry ' + event.entry.id + ' as entry ' + entry.id + '.');
-      await refresh(session);
+      announce('Reposted entry ' + entryId + ' as entry ' + entry.id + '.');
+      await refresh(session, session.view === 'activity' ? { entryId: entry.id, operation: 'post' } : undefined);
     } catch (error) {
       report(session, error);
     }

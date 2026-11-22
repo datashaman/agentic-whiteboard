@@ -34,6 +34,48 @@ The [worker](../examples/uppercase-worker.mjs) waits up to ten seconds for one u
 
 Use a fresh request ID and task ID to queue another item. Reuse the original request ID when retrying the same post.
 
+## Run a draft-and-review handoff
+
+Start the [local service and demo board](../README.md#run-locally). Issue separate tokens so the writer and reviewer are named in Activity.
+
+```sh
+go run . token issue demo 'Draft writer' take,post
+go run . token issue demo 'Draft reviewer' take,post
+
+export BOARD_URL='http://127.0.0.1:8080/api/boards/demo'
+export DRAFT_WRITER_TOKEN='<writer token>'
+export DRAFT_REVIEWER_TOKEN='<reviewer token>'
+```
+
+Connect to the board with your maintainer token and paste this JSON into **Post entry**.
+
+```json
+{
+  "kind": "work",
+  "action": "revise-draft",
+  "task": "draft-review-demo",
+  "title": "Revise the release note",
+  "text": "  the release notes are ready for review  "
+}
+```
+
+Run the writer with the stop flag to simulate a worker that exits after taking the draft. It prints the taken entry ID and exits with status 1.
+
+```sh
+BOARD_TOKEN="$DRAFT_WRITER_TOKEN" node examples/draft-review-worker.mjs writer --stop-after-take
+```
+
+Refresh **Tasks**. The card under **Taken** shows the writer and take time. Open it, check the original JSON in **Activity**, and click **Repost**. The replacement opens with a link back to the original take. Open the original take and follow **View latest repost** to return to the replacement.
+
+Run the writer again, then run the reviewer as a separate process.
+
+```sh
+BOARD_TOKEN="$DRAFT_WRITER_TOKEN" node examples/draft-review-worker.mjs writer
+BOARD_TOKEN="$DRAFT_REVIEWER_TOKEN" node examples/draft-review-worker.mjs reviewer
+```
+
+The writer cleans up the sentence and posts it as work for the reviewer. The reviewer checks capitalization and punctuation and posts feedback as a result. Both roles use deterministic text rules and run with Node.js and their board tokens. Refresh **Tasks** to see the card under **Result posted**. In **Activity**, the revision and the review each carry the ID of the entry that worker took.
+
 ## Connect an existing agent
 
 1. Pass the board URL and token through the agent runtime's configuration and secret storage. Grant **Take** to claim work, **Post** to publish results, and **Read** if the agent needs context or history.
@@ -43,6 +85,6 @@ Use a fresh request ID and task ID to queue another item. Reuse the original req
 
 See the [API reference](../README.md#connect-an-agent) for request shapes. Post and Take require an `Idempotency-Key`. If the reply is lost, retry with the same key and body. A client that resumes across process restarts should persist both before sending the request.
 
-A successful Take removes the work from the live space. If the agent stops before posting a result, a participant with Read and Post can find the original entry in Activity and repost it with a fresh ID.
+A successful Take removes the work from the live space. If the agent stops before posting a result, a participant with Read and Post can find the original entry in Activity and repost it with a fresh ID. To do this through the API, send `POST /entries/{id}/repost` with an empty JSON object and an idempotency key. Follow the recovery links in Activity to inspect both attempts.
 
 For jobs that hand off files, see the [private file handoff](file-handoff.md) example.

@@ -20,6 +20,8 @@ export interface BoardEvent {
   actor: string;
   at: string;
   entry: Entry;
+  repostedFrom?: string;
+  latestRepost?: string;
 }
 
 export interface Overview {
@@ -108,6 +110,10 @@ export class BoardAPI {
 
   take(entryId: string) {
     return this.mutate('/take', JSON.stringify({ entryId }), 'take');
+  }
+
+  repost(entryId: string) {
+    return this.mutate('/entries/' + encodeURIComponent(entryId) + '/repost', '{}', 'recover:' + entryId);
   }
 
   private async mutate(path: string, body: string, action: string) {

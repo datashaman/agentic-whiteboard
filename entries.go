@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -136,6 +137,49 @@ func (a *api) post(w http.ResponseWriter, r *http.Request, access boardAccess) {
 			RETURNING id::text, payload, posted_at
 		`, access.ID, input.Payload, match))
 	})
+	if err != nil {
+		writeFailure(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (a *api) repost(w http.ResponseWriter, r *http.Request, access boardAccess) {
+	if !slices.Contains(access.Permissions, "post") {
+		writeError(w, http.StatusForbidden, "forbidden", "post permission is required")
+		return
+	}
+	key, err := requestKey(r)
+	if err != nil {
+		writeFailure(w, r, err)
+		return
+	}
+	if _, err := decodeRequest[struct{}](w, r); err != nil {
+		writeFailure(w, r, err)
+		return
+	}
+	notFound := &apiError{http.StatusNotFound, "not_found", "taken entry not found on this board"}
+	source := r.PathValue("id")
+	id, err := strconv.ParseInt(source, 10, 64)
+	if err != nil || id < 1 || strconv.FormatInt(id, 10) != source {
+		writeFailure(w, r, notFound)
+		return
+	}
+
+	// Repost inputs have their own shape in the idempotency log. The event
+	// remains a Post so existing history clients see the new entry as usual.
+	inputs := json.RawMessage(`{"repost":` + strconv.Quote(source) + `}`)
+	result, err := a.mutate(r.Context(), r.Context(), access, key, "post", inputs, func(ctx context.Context, tx pgx.Tx) (entry, error) {
+		return scanEntry(tx.QueryRow(ctx, `
+			INSERT INTO entries (board, payload, match_data, reposted_from)
+			SELECT board, payload, match_data, id FROM entries
+			WHERE board = $1 AND id = $2 AND NOT live
+			RETURNING id::text, payload, posted_at
+		`, access.ID, id))
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = notFound
+	}
 	if err != nil {
 		writeFailure(w, r, err)
 		return
