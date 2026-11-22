@@ -92,7 +92,7 @@ The service uses HTTPS when `WHITEBOARD_TLS_CERT` and `WHITEBOARD_TLS_KEY` point
 | Operation | Request | Permission |
 | --- | --- | --- |
 | Board details | `GET` at the board URL | Any board token |
-| Post | `POST /entries` with a `payload` object | Post |
+| Post | `POST /entries` with a `payload` object and optional `expiresAt` | Post |
 | Read | `POST /read` with a `pattern` and optional `waitMs` | Read |
 | Take | `POST /take` with a `pattern` or `entryId`, and optional `waitMs` | Take |
 | Browse | `POST /browse` with a `pattern` | Read |
@@ -101,6 +101,10 @@ The service uses HTTPS when `WHITEBOARD_TLS_CERT` and `WHITEBOARD_TLS_KEY` point
 | Repost a taken entry | `POST /entries/{id}/repost` with `{}` and an `Idempotency-Key` | Read and Post |
 
 Patterns match the specified top-level fields by JSON value. An empty pattern matches all live entries. Read and Take pick the oldest match and return HTTP 204 when a pattern has no match after the requested wait. Post and Take require an idempotency key. Use a fresh key for each new operation and reuse it when retrying that operation.
+
+Set **Available until** in the browser, or send an RFC 3339 `expiresAt` timestamp alongside `payload`. At that time, untaken entries stop matching Browse, Read, and Take. The server uses the database clock, including while a board is archived. Activity and entry details still show the exact JSON, deadline, and expired status. Exact-ID Take returns HTTP 409 with code `entry_expired` for an expired, untaken entry.
+
+Omitting `expiresAt` leaves the entry available until taken. A past deadline posts an entry that is immediately expired. The timestamp is stored at microsecond precision. Retrying a Post with the same key keeps its original deadline. A successful Take is still recorded if the deadline passes afterward. Repost keeps a taken entry's deadline and returns `entry_expired` after it passes. Use a fresh Post when you want to offer the same work again with a new deadline.
 
 Browse and History return up to 50 records per page. If the response has a `nextCursor`, pass it as the `cursor` query parameter with the same Browse pattern or History selection to fetch the next page. Pass `summary=1` to list only the fields the browser uses for titles and task navigation. Open a record to fetch its full JSON.
 

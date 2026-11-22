@@ -99,19 +99,7 @@ func TestWaitingTakeObservesArchiveEvenAfterQuickReopen(t *testing.T) {
 	go func() {
 		pending <- f.request(ctx, "POST", "demo/take", token, key, `{"pattern":{},"waitMs":30000}`)
 	}()
-	for {
-		var blocked bool
-		err := f.db.QueryRow(ctx, `
-			SELECT EXISTS (SELECT FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))
-		`, locker).Scan(&blocked)
-		if err != nil {
-			t.Fatalf("waiting Take never reached its request lock: %v", err)
-		}
-		if blocked {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	f.waitForBlockedRequest(t, ctx, locker)
 	f.operator(t, "board", "archive", "demo")
 	f.operator(t, "board", "reopen", "demo")
 	if err := tx.Commit(ctx); err != nil {
@@ -121,5 +109,22 @@ func TestWaitingTakeObservesArchiveEvenAfterQuickReopen(t *testing.T) {
 	(<-pending).want(t, 409, &response)
 	if response.Code != "board_archived" {
 		t.Fatalf("waiting Take returned %q, want board_archived", response.Code)
+	}
+}
+
+func (f *apiFixture) waitForBlockedRequest(t *testing.T, ctx context.Context, locker int32) {
+	t.Helper()
+	for {
+		var blocked bool
+		err := f.db.QueryRow(ctx, `
+			SELECT EXISTS (SELECT FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))
+		`, locker).Scan(&blocked)
+		if err != nil {
+			t.Fatalf("waiting request never reached its lock: %v", err)
+		}
+		if blocked {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

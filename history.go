@@ -28,7 +28,7 @@ func eventQuery(fields string, includeReposts bool) string {
 				ORDER BY child.id DESC LIMIT 1
 			) END`
 	}
-	return "SELECT ev.id::text, ev.operation, t.actor, ev.at, en.id::text, " + fields + ", en.posted_at" + reposts + `
+	return "SELECT ev.id::text, ev.operation, t.actor, ev.at, en.id::text, " + fields + ", en.posted_at, " + expiryFields + reposts + `
 		FROM events ev
 		JOIN tokens t ON t.board = ev.board AND t.id = ev.token_id
 		JOIN entries en ON en.board = ev.board AND en.id = ev.entry_id
@@ -39,9 +39,10 @@ func collectEvents(rows pgx.Rows, summary bool) ([]event, error) {
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (event, error) {
 		var result event
 		err := row.Scan(&result.ID, &result.Operation, &result.Actor, &result.At,
-			&result.Entry.ID, &result.Entry.Payload, &result.Entry.PostedAt, &result.RepostedFrom, &result.LatestRepost)
+			&result.Entry.ID, &result.Entry.Payload, &result.Entry.PostedAt, &result.Entry.ExpiresAt,
+			&result.Entry.Expired, &result.RepostedFrom, &result.LatestRepost)
 		result.At = result.At.UTC()
-		result.Entry.PostedAt = result.Entry.PostedAt.UTC()
+		result.Entry.normalizeTimes()
 		if err == nil && summary {
 			result.Entry.Payload, err = decodeSummary(result.Entry.Payload)
 		}
