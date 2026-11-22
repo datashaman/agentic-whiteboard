@@ -57,6 +57,30 @@ test('Refresh keeps the selected Activity page and focused record until navigati
   assert.equal(view.focusedRecord, undefined);
 });
 
+test('Entry links prefer the Take and event links keep their exact operation', async () => {
+  const posted = event('1', entry('1', 'alpha'));
+  const taken = event('2', posted.entry, 'take');
+  let events = [posted];
+  const view = viewWith({ history: async (_signal, _cursor, id) => ({ events: id === '1' ? events : [] }) });
+
+  view.select({ type: 'focus', focus: { entryId: '1' } });
+  await view.refresh(silent);
+  assert.equal(view.focusedRecord, posted);
+
+  view.select({ type: 'focus', focus: { entryId: '1', operation: 'take' } });
+  await view.refresh(silent);
+  assert.equal(view.focusedRecord, undefined);
+
+  events = [taken, posted];
+  view.select({ type: 'focus', focus: { entryId: '1' } });
+  await view.refresh(silent);
+  assert.equal(view.focusedRecord, taken);
+
+  view.select({ type: 'focus', focus: { entryId: '1', operation: 'post' } });
+  await view.refresh(silent);
+  assert.equal(view.focusedRecord, posted);
+});
+
 test('a page failure retains matching results and applies archive status as soon as it arrives', async () => {
   const good = entry('2', 'alpha');
   const failedPage = deferred();

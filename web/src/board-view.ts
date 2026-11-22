@@ -3,7 +3,7 @@ import { collectTaskIssues, issueOf, matchesTask, relatedIssue, taskCards, type 
 
 export type View = 'tasks' | 'entries' | 'activity';
 type TaskFilter = 'open' | 'result';
-export type ActivityFocus = { entryId: string; operation: BoardEvent['operation'] };
+export type ActivityFocus = { entryId: string; operation?: BoardEvent['operation'] };
 export type ViewAction =
   | { type: 'view'; view: View; task?: TaskRef }
   | { type: 'issue'; issue: string }
@@ -60,7 +60,7 @@ export class BoardView {
   get focusedRecord(): BoardEvent | undefined {
     const { focus } = this.selection;
     const event = this.data?.focused;
-    if (event && event.entry.id === focus?.entryId && event.operation === focus.operation) return event;
+    if (event && focus && event.entry.id === focus.entryId && (!focus.operation || event.operation === focus.operation)) return event;
   }
 
   get activity(): readonly BoardEvent[] {
@@ -181,13 +181,16 @@ export class BoardView {
       signal.throwIfAborted();
       history = await this.reader.history(signal, history.nextCursor);
     }
+    const entryEvents = focused?.events ?? [];
     return {
       issues: overview.issues.map(value => issueOf({ issue: value })),
       entries: live?.entries.filter(accepts) ?? [],
       events: history?.events.filter(event => accepts(event.entry)) ?? [],
       cards: view === 'tasks' ? taskCards(overview.events, taskIssues) : [],
       nextCursor: live?.nextCursor ?? history?.nextCursor,
-      focused: focused?.events.find(event => event.operation === focus?.operation),
+      focused: focus?.operation
+        ? entryEvents.find(event => event.operation === focus.operation)
+        : entryEvents.find(event => event.operation === 'take') ?? entryEvents[0],
     };
   }
 }
