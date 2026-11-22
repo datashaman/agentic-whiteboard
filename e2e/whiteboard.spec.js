@@ -287,3 +287,28 @@ test("paged records load JSON on demand and a lost post reply survives reload", 
   await button("Previous page").click();
   await expect(entries.getByText("Note 1", { exact: true })).toBeVisible();
 });
+
+test("an expired post leaves live views and keeps its JSON in Activity", async ({ page }) => {
+  const button = name => page.getByRole("button", { name, exact: true });
+  const title = "Expired work offer";
+  const payload = { kind: "work", task: "timed-offer", title, expiresAt: "Workflow-defined field" };
+  await page.goto(boardPath);
+  await page.getByLabel("Access token").fill(process.env.WHITEBOARD_E2E_BROWSER_TOKEN);
+  await button("Connect").click();
+  await button("Post entry").click();
+  await page.getByLabel("JSON object").fill(JSON.stringify(payload));
+  await page.getByLabel("Available until").fill("2000-01-01T12:00");
+  await button("Post").click();
+  await expect(page.getByRole("status").filter({ hasText: "Its deadline has passed." })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Available" }).getByText(title)).toHaveCount(0);
+  await button("Live entries").click();
+  await expect(page.getByRole("region", { name: "Live entries" }).getByText(title)).toHaveCount(0);
+
+  await button("Activity").click();
+  const activity = page.getByRole("region", { name: "Activity" });
+  const record = activity.locator("details").filter({ hasText: title });
+  await expect(record.getByText("Expired", { exact: true })).toBeVisible();
+  await record.getByText(title, { exact: true }).click();
+  await expect(record.getByText("Available until")).toBeVisible();
+  expect(JSON.parse(await record.getByLabel("Entry JSON").innerText())).toEqual(payload);
+});

@@ -15,16 +15,22 @@ import (
 )
 
 type entry struct {
-	ID       string          `json:"id"`
-	Payload  json.RawMessage `json:"payload"`
-	PostedAt time.Time       `json:"postedAt"`
+	ID        string          `json:"id"`
+	Payload   json.RawMessage `json:"payload"`
+	PostedAt  time.Time       `json:"postedAt"`
+	ExpiresAt *time.Time      `json:"expiresAt,omitempty"`
+	Expired   bool            `json:"expired,omitempty"`
 }
 
-const matchingEntries = "SELECT id::text, payload, posted_at " + matchClause
+const expiryFields = "expires_at, (live AND expires_at IS NOT NULL AND expires_at <= statement_timestamp())"
+const entryFields = "id::text, payload, posted_at, " + expiryFields
+const matchingEntries = "SELECT " + entryFields + matchClause
 
 const filterEntries = `
 	FROM entries
-	WHERE board = $1 AND live AND NOT EXISTS (
+	WHERE board = $1 AND live
+	AND (expires_at IS NULL OR expires_at > statement_timestamp())
+	AND NOT EXISTS (
 		SELECT FROM jsonb_each($2::jsonb) AS pattern
 		WHERE entries.match_data -> pattern.key IS DISTINCT FROM pattern.value
 	)
@@ -34,9 +40,16 @@ const matchClause = filterEntries + " ORDER BY entries.id "
 
 func scanEntry(row pgx.Row) (entry, error) {
 	var result entry
-	err := row.Scan(&result.ID, &result.Payload, &result.PostedAt)
-	result.PostedAt = result.PostedAt.UTC()
+	err := row.Scan(&result.ID, &result.Payload, &result.PostedAt, &result.ExpiresAt, &result.Expired)
+	result.normalizeTimes()
 	return result, err
+}
+
+func (e *entry) normalizeTimes() {
+	e.PostedAt = e.PostedAt.UTC()
+	if e.ExpiresAt != nil {
+		*e.ExpiresAt = e.ExpiresAt.UTC()
+	}
 }
 
 func (a *api) browse(w http.ResponseWriter, r *http.Request, access boardAccess) {
@@ -59,7 +72,7 @@ func (a *api) browse(w http.ResponseWriter, r *http.Request, access boardAccess)
 	}
 	fields, summary := listFields(r)
 	rows, err := a.db.Query(r.Context(),
-		"SELECT id::text, "+fields+", posted_at "+filterEntries+" AND id > $3 ORDER BY entries.id LIMIT $4",
+		"SELECT id::text, "+fields+", posted_at, "+expiryFields+filterEntries+" AND id > $3 ORDER BY entries.id LIMIT $4",
 		access.ID, pattern, cursor, pageSize+1)
 	if err != nil {
 		writeFailure(w, r, err)
@@ -94,7 +107,7 @@ func (a *api) entryDetails(w http.ResponseWriter, r *http.Request, access boardA
 		return
 	}
 	result, err := scanEntry(a.db.QueryRow(r.Context(),
-		"SELECT id::text, payload, posted_at FROM entries WHERE board = $1 AND id = $2", access.ID, id))
+		"SELECT "+entryFields+" FROM entries WHERE board = $1 AND id = $2", access.ID, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "not_found", "entry not found on this board")
 		return
@@ -120,7 +133,8 @@ func (a *api) post(w http.ResponseWriter, r *http.Request, access boardAccess) {
 		return
 	}
 	input, err := decodeRequest[struct {
-		Payload json.RawMessage `json:"payload"`
+		Payload   json.RawMessage `json:"payload"`
+		ExpiresAt *string         `json:"expiresAt"`
 	}](w, r)
 	if err != nil {
 		writeFailure(w, r, err)
@@ -131,11 +145,29 @@ func (a *api) post(w http.ResponseWriter, r *http.Request, access boardAccess) {
 		writeFailure(w, r, err)
 		return
 	}
-	result, err := a.mutate(r.Context(), r.Context(), access, key, "post", match, func(ctx context.Context, tx pgx.Tx) (entry, error) {
+	inputs := match
+	var expiresAt *time.Time
+	if input.ExpiresAt != nil {
+		at, err := time.Parse(time.RFC3339Nano, *input.ExpiresAt)
+		at = at.UTC().Truncate(time.Microsecond)
+		if err != nil || at.Year() < 1 || at.Year() > 9999 {
+			writeFailure(w, r, invalidRequest("expiresAt must be an RFC 3339 timestamp"))
+			return
+		}
+		expiresAt = &at
+		inputs, err = json.Marshal(struct {
+			Payload   json.RawMessage `json:"payload"`
+			ExpiresAt time.Time       `json:"expiresAt"`
+		}{Payload: match, ExpiresAt: at})
+		if err != nil {
+			writeFailure(w, r, err)
+			return
+		}
+	}
+	result, err := a.mutate(r.Context(), r.Context(), access, key, "post", inputs, func(ctx context.Context, tx pgx.Tx) (entry, error) {
 		return scanEntry(tx.QueryRow(ctx, `
-			INSERT INTO entries (board, payload, match_data) VALUES ($1, $2, $3)
-			RETURNING id::text, payload, posted_at
-		`, access.ID, input.Payload, match))
+			INSERT INTO entries (board, payload, match_data, expires_at) VALUES ($1, $2, $3, $4)
+			RETURNING `+entryFields, access.ID, input.Payload, match, expiresAt))
 	})
 	if err != nil {
 		writeFailure(w, r, err)
@@ -170,12 +202,15 @@ func (a *api) repost(w http.ResponseWriter, r *http.Request, access boardAccess)
 	// remains a Post so existing history clients see the new entry as usual.
 	inputs := json.RawMessage(`{"repost":` + strconv.Quote(source) + `}`)
 	result, err := a.mutate(r.Context(), r.Context(), access, key, "post", inputs, func(ctx context.Context, tx pgx.Tx) (entry, error) {
-		return scanEntry(tx.QueryRow(ctx, `
-			INSERT INTO entries (board, payload, match_data, reposted_from)
-			SELECT board, payload, match_data, id FROM entries
+		result, err := scanEntry(tx.QueryRow(ctx, `
+			INSERT INTO entries (board, payload, match_data, reposted_from, expires_at)
+			SELECT board, payload, match_data, id, expires_at FROM entries
 			WHERE board = $1 AND id = $2 AND NOT live
-			RETURNING id::text, payload, posted_at
-		`, access.ID, id))
+			RETURNING `+entryFields, access.ID, id))
+		if err == nil && result.Expired {
+			return entry{}, entryExpired
+		}
+		return result, err
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = notFound
@@ -225,17 +260,17 @@ func (a *api) mutate(
 	var result entry
 	var sameInputs bool
 	err = tx.QueryRow(ctx, `
-		SELECT ev.operation = $4 AND ev.inputs = $5::jsonb, en.id::text, en.payload, en.posted_at
+		SELECT ev.operation = $4 AND ev.inputs = $5::jsonb, en.id::text, en.payload, en.posted_at, `+expiryFields+`
 		FROM events ev JOIN entries en ON en.board = ev.board AND en.id = ev.entry_id
 		WHERE ev.board = $1 AND ev.token_id = $2 AND ev.request_key = $3
 	`, access.ID, access.tokenID, key[:], operation, inputs).
-		Scan(&sameInputs, &result.ID, &result.Payload, &result.PostedAt)
+		Scan(&sameInputs, &result.ID, &result.Payload, &result.PostedAt, &result.ExpiresAt, &result.Expired)
 	switch {
 	case err == nil:
 		if !sameInputs {
 			return entry{}, &apiError{http.StatusConflict, "request_conflict", "this request ID already has a different outcome"}
 		}
-		result.PostedAt = result.PostedAt.UTC()
+		result.normalizeTimes()
 	case errors.Is(err, pgx.ErrNoRows):
 		// Hold a shared lock until commit so archiving waits for mutations already in progress.
 		if err := access.checkArchive(tx.QueryRow(ctx, boardState+" FOR SHARE", access.ID)); err != nil {
@@ -359,13 +394,7 @@ func (a *api) take(w http.ResponseWriter, r *http.Request, access boardAccess) {
 			if entryID != "" {
 				return takeExact(ctx, tx, access.ID, entryID)
 			}
-			// Waiting on the first candidate preserves order if a concurrent take rolls back.
-			return scanEntry(tx.QueryRow(ctx, `
-				WITH candidate AS (SELECT id `+matchClause+` LIMIT 1 FOR UPDATE)
-				UPDATE entries en SET live = false FROM candidate
-				WHERE en.board = $1 AND en.id = candidate.id
-				RETURNING en.id::text, en.payload, en.posted_at
-			`, access.ID, pattern))
+			return takePattern(ctx, tx, access.ID, pattern)
 		})
 	})
 	if wait > 0 && errors.Is(err, pgx.ErrNoRows) {
@@ -376,28 +405,53 @@ func (a *api) take(w http.ResponseWriter, r *http.Request, access boardAccess) {
 	writeLookup(w, r, result, err)
 }
 
+var entryExpired = &apiError{http.StatusConflict, "entry_expired", "This entry's availability deadline has passed."}
+
+func takePattern(ctx context.Context, tx pgx.Tx, board string, pattern json.RawMessage) (entry, error) {
+	for {
+		// Waiting on the first candidate preserves order if a concurrent take rolls back.
+		var id int64
+		err := tx.QueryRow(ctx, "SELECT id "+matchClause+"LIMIT 1 FOR UPDATE", board, pattern).Scan(&id)
+		if err != nil {
+			return entry{}, err
+		}
+		result, err := claimLockedEntry(ctx, tx, board, id)
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return result, err
+		}
+		// The first candidate expired while waiting for its lock. Look for the next match.
+	}
+}
+
 func takeExact(ctx context.Context, tx pgx.Tx, board, entryID string) (entry, error) {
 	notFound := &apiError{http.StatusNotFound, "not_found", "entry not found on this board"}
 	id, err := strconv.ParseInt(entryID, 10, 64)
 	if err != nil || id < 1 || strconv.FormatInt(id, 10) != entryID {
 		return entry{}, notFound
 	}
-	result, err := scanEntry(tx.QueryRow(ctx, `
-		UPDATE entries SET live = false WHERE board = $1 AND id = $2 AND live
-		RETURNING id::text, payload, posted_at
-	`, board, id))
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return result, err
+	var live bool
+	err = tx.QueryRow(ctx, "SELECT live FROM entries WHERE board = $1 AND id = $2 FOR UPDATE", board, id).Scan(&live)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return entry{}, notFound
 	}
-	var exists bool
-	err = tx.QueryRow(ctx, "SELECT EXISTS (SELECT FROM entries WHERE board = $1 AND id = $2)", board, id).Scan(&exists)
 	if err != nil {
 		return entry{}, err
 	}
-	if !exists {
-		return entry{}, notFound
+	if !live {
+		return entry{}, &apiError{http.StatusConflict, "already_taken", "this entry has already been taken"}
 	}
-	return entry{}, &apiError{http.StatusConflict, "already_taken", "this entry has already been taken"}
+	result, err := claimLockedEntry(ctx, tx, board, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return entry{}, entryExpired
+	}
+	return result, err
+}
+
+func claimLockedEntry(ctx context.Context, tx pgx.Tx, board string, id int64) (entry, error) {
+	return scanEntry(tx.QueryRow(ctx, `
+		UPDATE entries SET live = false WHERE board = $1 AND id = $2
+		AND (expires_at IS NULL OR expires_at > clock_timestamp())
+		RETURNING `+entryFields, board, id))
 }
 
 func parseWait(raw json.RawMessage) (time.Duration, error) {

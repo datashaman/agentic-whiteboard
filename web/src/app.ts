@@ -87,6 +87,7 @@ const pattern = element<HTMLTextAreaElement>('pattern');
 const composer = element<HTMLDialogElement>('composer');
 const postError = element('post-error');
 const payloadEditor = element<HTMLTextAreaElement>('payload');
+const expiryInput = element<HTMLInputElement>('expires-at');
 const takenEntry = element<HTMLDialogElement>('taken-entry');
 const takenPayload = element('taken-payload');
 const takenLinks = element('taken-links');
@@ -116,6 +117,7 @@ function disconnect(reason = '') {
   eventList.replaceChildren();
   for (const lane of lanes) lane.querySelector('.cards')!.replaceChildren();
   payloadEditor.value = '{}';
+  expiryInput.value = '';
   takenPayload.textContent = '';
   takenLinks.replaceChildren();
   takenLinks.hidden = true;
@@ -132,7 +134,9 @@ function report(session: Session, error: unknown, target = boardError) {
     disconnect(error.message);
   } else {
     message(target, errorMessage(error));
-    if (error instanceof APIError && error.code === 'board_archived') void refresh(session);
+    if (error instanceof APIError && (error.code === 'board_archived' || error.code === 'entry_expired')) {
+      void refresh(session);
+    }
   }
 }
 
@@ -262,6 +266,9 @@ function record(session: Session, entry: Entry, openId: string | undefined,
   }
   label.append(node('strong', 'record-title', titleOf(entry)));
   if (typeof entry.payload.kind === 'string') label.append(tag(entry.payload.kind));
+  const expired = tag('Expired');
+  expired.hidden = !entry.expired;
+  label.append(expired);
   const meta = node('span', 'summary-meta');
   const issueKey = issueOf(entry.payload);
   if (issueKey) meta.append(tag(issueLabel(issueKey), true));
@@ -273,11 +280,17 @@ function record(session: Session, entry: Entry, openId: string | undefined,
   let request: AbortController | undefined;
   let full: Entry | undefined;
   function showPayload(payload: Entry) {
+    expired.hidden = !payload.expired;
     const raw = node('pre');
     raw.setAttribute('aria-label', 'Entry JSON');
     const links = node('ul', 'entry-links');
     renderPayload(raw, links, payload.payload);
     body.replaceChildren(raw, links);
+    if (payload.expiresAt) {
+      const deadline = node('p', 'hint', 'Available until ');
+      deadline.append(timestamp(payload.expiresAt));
+      body.append(deadline);
+    }
     if (event?.repostedFrom) {
       const entryId = event.repostedFrom;
       body.append(button('View original take (entry ' + entryId + ')',
@@ -288,7 +301,7 @@ function record(session: Session, entry: Entry, openId: string | undefined,
       body.append(button('View latest repost (entry ' + entryId + ')',
         () => void focusActivity(session, { entryId, operation: 'post' })));
     }
-    if (action) body.append(action());
+    if (action && (event || !payload.expired)) body.append(action());
   }
   function syncDisclosure() {
     if (!details.open) {
@@ -645,19 +658,23 @@ element<HTMLFormElement>('post-form').onsubmit = async event => {
   await mutate(session, event.submitter, async () => {
     cancel.disabled = true;
     payloadEditor.readOnly = true;
+    expiryInput.readOnly = true;
     message(postError);
     try {
-      const entry = await session.api.post(jsonObject(payloadEditor.value), 'post');
+      const expiresAt = expiryInput.value ? new Date(expiryInput.value).toISOString() : undefined;
+      const entry = await session.api.post(jsonObject(payloadEditor.value), expiresAt);
       if (active !== session) return;
       payloadEditor.value = '{}';
+      expiryInput.value = '';
       composer.close();
-      announce('Posted entry ' + entry.id + '.');
+      announce('Posted entry ' + entry.id + (entry.expired ? '. Its deadline has passed.' : '.'));
       await refresh(session);
     } catch (error) {
       report(session, error, postError);
     } finally {
       cancel.disabled = false;
       payloadEditor.readOnly = false;
+      expiryInput.readOnly = false;
     }
   });
 };

@@ -124,6 +124,11 @@
         <label for="payload">JSON object</label>
         <textarea id="payload" rows="9" spellcheck="false" required autofocus>{}</textarea>
       </div>
+      <div class="stack field">
+        <label for="expires-at">Available until</label>
+        <input id="expires-at" type="datetime-local" aria-describedby="expires-at-hint">
+        <p id="expires-at-hint" class="hint">Optional, in your local time.</p>
+      </div>
       <p id="post-error" class="error" role="alert" hidden></p>
       <div class="controls dialog-actions">
         <button id="cancel-post" type="button">Cancel</button>

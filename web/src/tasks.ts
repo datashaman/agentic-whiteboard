@@ -133,6 +133,7 @@ export function taskCards(events: BoardEvent[], taskIssues: TaskIssues): TaskCar
     if (!ref) continue;
     const key = taskKey(ref);
     if (entry.payload.kind === 'work') {
+      if (entry.expired) continue;
       if (!historicalWork.has(key)) historicalWork.set(key, entry);
       const live = liveWork.get(key);
       if (!takes.has(entry.id) && (!live || BigInt(entry.id) > BigInt(live.id))) liveWork.set(key, entry);

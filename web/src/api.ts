@@ -13,6 +13,8 @@ export interface Entry {
   id: string;
   payload: Payload;
   postedAt: string;
+  expiresAt?: string;
+  expired?: boolean;
 }
 
 export interface BoardEvent {
@@ -105,8 +107,9 @@ export class BoardAPI {
     return this.request<Entry>('/entries/' + encodeURIComponent(id), undefined, signal);
   }
 
-  post(payload: string, action: string) {
-    return this.mutate('/entries', '{"payload":' + payload + '}', action);
+  post(payload: string, expiresAt?: string) {
+    const deadline = expiresAt === undefined ? '' : ',"expiresAt":' + JSON.stringify(expiresAt);
+    return this.mutate('/entries', '{"payload":' + payload + deadline + '}', 'post');
   }
 
   take(entryId: string) {
