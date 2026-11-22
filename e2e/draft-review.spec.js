@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { expect, test } from "@playwright/test";
+import { numberText, parseExactJSON } from "../shared/exact-json.mjs";
 
 const exec = promisify(execFile);
 const worker = fileURLToPath(new URL("../examples/draft-review-worker.mjs", import.meta.url));
@@ -11,9 +12,11 @@ test("the draft writer can stop after Take and hand off a recovered draft to the
   const board = "/boards/" + process.env.WHITEBOARD_E2E_BOARD;
   const api = process.env.WHITEBOARD_E2E_URL + "/api" + board;
   const token = process.env.WHITEBOARD_E2E_BROWSER_TOKEN;
+  const issue = "9007199254740993";
   const draft = {
     kind: "work", action: "revise-draft", task: "draft-review-demo",
     title: "Revise the release note", text: "  the release notes are ready for review  ",
+    issue: JSON.rawJSON(issue),
   };
   const posted = await request.post(api + "/entries", {
     headers: { Authorization: "Bearer " + token, "Idempotency-Key": randomUUID() },
@@ -54,7 +57,7 @@ test("the draft writer can stop after Take and hand off a recovered draft to the
 
   const history = await request.get(api + "/history", { headers: { Authorization: "Bearer " + token } });
   await expect(history).toBeOK();
-  const { events } = await history.json();
+  const { events } = parseExactJSON(await history.text());
   const replacement = events.find(event => event.repostedFrom === original.id);
   expect(replacement?.entry.payload).toEqual(draft);
   const revision = events.find(event => event.operation === "post" && event.entry.payload.action === "review-draft");
@@ -63,6 +66,7 @@ test("the draft writer can stop after Take and hand off a recovered draft to the
       sourceEntryId: replacement.entry.id, text: "The release notes are ready for review.",
     } },
   });
+  expect(numberText(revision.entry.payload.issue)).toBe(issue);
   const review = events.find(event => event.operation === "post" && event.entry.payload.title === "Draft review");
   expect(review).toMatchObject({
     actor: "Draft reviewer", entry: { payload: {
@@ -70,4 +74,5 @@ test("the draft writer can stop after Take and hand off a recovered draft to the
       feedback: ["The draft starts with a capital letter and ends with punctuation."],
     } },
   });
+  expect(numberText(review.entry.payload.issue)).toBe(issue);
 });

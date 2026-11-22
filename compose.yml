@@ -23,6 +23,7 @@ services:
         RUN npm ci
         COPY web/build.mjs web/index.html web/styles.css web/tsconfig.json ./
         COPY web/src/ ./src/
+        COPY shared/ /src/shared/
         RUN npm run build
 
         FROM golang:1.27.4-alpine AS server
@@ -143,6 +144,7 @@ services:
       NODE_EXTRA_CA_CERTS: /certs/filestore.pem
     volumes:
       - ./examples:/examples:ro
+      - ./shared:/shared:ro
       - file-certificate:/certs:ro
     command: ["node", "/examples/file-worker.mjs"]
 

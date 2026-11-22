@@ -3,6 +3,8 @@
 !go.mod
 !go.sum
 !schema.sql
+!shared/
+!shared/**
 !web/
 web/*
 !web/build.mjs

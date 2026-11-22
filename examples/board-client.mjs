@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { parseExactJSON, supportsExactJSON } from "../shared/exact-json.mjs";
 
 export async function connectBoard() {
+  if (!supportsExactJSON()) throw new Error("Use Node.js 22 or later to preserve exact JSON numbers.");
   const token = process.env.BOARD_TOKEN?.trim();
   if (!process.env.BOARD_URL || !token) {
     throw new Error("Set BOARD_URL and BOARD_TOKEN before starting the worker.");
@@ -46,7 +48,7 @@ export async function connectBoard() {
         signal: AbortSignal.timeout(15_000),
       });
       if (response.ok) {
-        return { status: response.status, entry: response.status === 204 ? null : await response.json() };
+        return { status: response.status, entry: response.status === 204 ? null : parseExactJSON(await response.text()) };
       }
       if (response.status === 409) {
         const error = await response.json().catch(() => null);

@@ -23,7 +23,7 @@ curl --fail-with-body "$BOARD_URL/entries" \
   --data '{"payload":{"kind":"work","action":"uppercase","task":"uppercase-demo","issue":42,"title":"Uppercase a message","text":"Hello, whiteboard!"}}'
 ```
 
-Run the worker from the repository root with Node.js 20 or later.
+Run the worker from the repository root with Node.js 22 or later. The example workers use its exact JSON support to forward numeric fields without rounding.
 
 ```sh
 export BOARD_TOKEN='<uppercase worker token>'

@@ -15,7 +15,7 @@ import (
 func TestExampleWorkerTakesMatchingWorkAndPostsResult(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("install Node.js 20 or later to run the example worker test")
+		t.Skip("install Node.js 22 or later to run the example worker test")
 	}
 	f := newAPIFixture(t)
 	_, poster := f.token(t, "demo", "Maintainer", "post,read")

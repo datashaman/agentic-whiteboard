@@ -53,7 +53,7 @@ Connect with the maintainer token and paste this JSON into **Post entry**. The n
 }
 ```
 
-Set `FILE_DEMO_DIR` to the directory printed when starting the local filestore. Then run the [file worker](../examples/file-worker.mjs) from the repository root with Node.js 20 or later.
+Set `FILE_DEMO_DIR` to the directory printed when starting the local filestore. Then run the [file worker](../examples/file-worker.mjs) from the repository root with Node.js 22 or later.
 
 ```sh
 export BOARD_URL='http://127.0.0.1:8080/api/boards/demo'
