@@ -1,0 +1,127 @@
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: whiteboard
+      POSTGRES_USER: whiteboard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - database:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "whiteboard", "-d", "whiteboard"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  whiteboard:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM node:22-alpine AS web
+        WORKDIR /src/web
+        COPY web/package.json web/package-lock.json ./
+        RUN npm ci
+        COPY web/build.mjs web/index.html web/styles.css web/tsconfig.json ./
+        COPY web/src/ ./src/
+        RUN npm run build
+
+        FROM golang:1.25-alpine AS server
+        WORKDIR /src
+        COPY go.mod go.sum ./
+        RUN go mod download
+        COPY *.go schema.sql ./
+        RUN CGO_ENABLED=0 go build -trimpath -o /out/whiteboard .
+
+        FROM alpine:3.23
+        RUN apk add --no-cache ca-certificates
+        COPY --from=server /out/whiteboard /usr/local/bin/whiteboard
+        COPY --from=web /src/web/dist /var/www/whiteboard
+        USER 65532:65532
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://whiteboard@db/whiteboard?sslmode=disable
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      WHITEBOARD_ADDR: 0.0.0.0:8080
+      WHITEBOARD_WEB_DIR: /var/www/whiteboard
+    entrypoint: ["/bin/sh", "-ec"]
+    command: ["whiteboard migrate && exec whiteboard serve"]
+    ports:
+      - "127.0.0.1:${WHITEBOARD_PORT:-8080}:8080"
+      - "127.0.0.1:${FILE_STORE_PORT:-8443}:${FILE_STORE_PORT:-8443}"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  files:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM rclone/rclone:1.76.0
+        RUN apk add --no-cache openssl apache2-utils
+    # The worker and host browser can use the same loopback file URL.
+    network_mode: service:whiteboard
+    depends_on:
+      whiteboard:
+        condition: service_healthy
+    environment:
+      FILE_STORE_PORT: ${FILE_STORE_PORT:-8443}
+      FILE_STORE_WORKER_PASSWORD: ${FILE_STORE_WORKER_PASSWORD:?Set FILE_STORE_WORKER_PASSWORD}
+      FILE_STORE_REVIEWER_PASSWORD: ${FILE_STORE_REVIEWER_PASSWORD:?Set FILE_STORE_REVIEWER_PASSWORD}
+    volumes:
+      - files:/files
+      - file-key:/keys
+      - file-certificate:/certs
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 077
+        if [ ! -e /keys/filestore.key ] && [ ! -e /certs/filestore.pem ]; then
+          openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+            -subj '/CN=127.0.0.1' -addext 'subjectAltName=IP:127.0.0.1' \
+            -keyout /keys/filestore.key -out /certs/filestore.pem
+        fi
+        chmod 644 /certs/filestore.pem
+        printf '%s\n' "$$FILE_STORE_WORKER_PASSWORD" | htpasswd -iBc /run/filestore-users worker
+        printf '%s\n' "$$FILE_STORE_REVIEWER_PASSWORD" | htpasswd -iB /run/filestore-users reviewer
+        if [ ! -e /files/transcript.txt ]; then
+          printf 'Hello from the private filestore.\n' > /files/transcript.txt
+        fi
+        exec rclone serve webdav /files --config /dev/null \
+          --addr "0.0.0.0:$$FILE_STORE_PORT" --min-tls-version tls1.2 \
+          --cert /certs/filestore.pem --key /keys/filestore.key --htpasswd /run/filestore-users
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - openssl s_client -brief -verify_return_error -verify_ip 127.0.0.1 -CAfile /certs/filestore.pem -connect "127.0.0.1:$$FILE_STORE_PORT" </dev/null >/dev/null 2>&1
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    image: node:22-alpine
+    profiles: ["worker"]
+    user: node
+    network_mode: service:whiteboard
+    depends_on:
+      files:
+        condition: service_healthy
+    environment:
+      BOARD_URL: http://127.0.0.1:8080/api/boards/demo
+      FILE_STORE_URL: https://127.0.0.1:${FILE_STORE_PORT:-8443}/
+      FILE_STORE_USER: worker
+      FILE_STORE_PASSWORD: ${FILE_STORE_WORKER_PASSWORD:?Set FILE_STORE_WORKER_PASSWORD}
+      NODE_EXTRA_CA_CERTS: /certs/filestore.pem
+    volumes:
+      - ./examples:/examples:ro
+      - file-certificate:/certs:ro
+    command: ["node", "/examples/file-worker.mjs"]
+
+volumes:
+  database:
+  files:
+  file-key:
+  file-certificate:

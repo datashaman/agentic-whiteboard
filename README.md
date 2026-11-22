@@ -4,6 +4,49 @@
 
 A shared, Linda-style whiteboard for people and agents. Participants post JSON objects, read matching entries, or take one atomically. Taken entries leave the live space and remain visible in activity history.
 
+## Run with Docker Compose
+
+The [Compose stack](compose.yml) starts PostgreSQL, the whiteboard with its browser UI, and an authenticated rclone WebDAV filestore. It applies migrations and seeds the example transcript.
+
+Choose three passwords and replace the placeholders below. Run `openssl rand -hex 24` in your terminal for each password you want to generate. Keep the database password for subsequent starts.
+
+Compose creates two WebDAV logins at startup.
+
+| Username | Password | Where to use it |
+| --- | --- | --- |
+| `worker` | `FILE_STORE_WORKER_PASSWORD` | Compose passes this login to the example worker. |
+| `reviewer` | `FILE_STORE_REVIEWER_PASSWORD` | Enter this login when the filestore prompts in your browser or terminal. |
+
+The token commands below issue credentials for the whiteboard API.
+
+```sh
+export POSTGRES_PASSWORD='<database password>'
+export FILE_STORE_WORKER_PASSWORD='<worker filestore password>'
+export FILE_STORE_REVIEWER_PASSWORD='<reviewer filestore password>'
+docker compose up --build -d --wait
+
+docker compose exec whiteboard whiteboard board create demo 'Demo whiteboard'
+docker compose exec whiteboard whiteboard token issue demo Maintainer post,read,take
+docker compose exec whiteboard whiteboard token issue demo 'File worker' take,post
+```
+
+Open `http://127.0.0.1:8080/boards/demo` with the maintainer token and post the [file demo job](docs/file-handoff.md#run-the-handoff). Then run the worker using its own board token.
+
+```sh
+export BOARD_TOKEN='<file worker board token>'
+docker compose run --rm -e BOARD_TOKEN worker
+```
+
+The worker processes one job and posts a report link in Activity. The filestore listens at `https://127.0.0.1:8443` and uses a local certificate. The curl command prompts for the password you set in `FILE_STORE_REVIEWER_PASSWORD`.
+
+```sh
+file_ca="$(mktemp)"
+docker compose cp files:/certs/filestore.pem "$file_ca"
+curl --fail-with-body --cacert "$file_ca" --user reviewer '<report URL from Activity>'
+```
+
+Opening the report in a browser requires trusting the local filestore certificate there. Both published ports bind to loopback. Set `WHITEBOARD_PORT` or `FILE_STORE_PORT` before starting to use different host ports, and use the selected filestore port in the posted transcript URL. `docker compose down` stops the stack and keeps the database, files, and certificate in named volumes.
+
 ## Run locally
 
 You need Go 1.25 or later and PostgreSQL for the service, plus Node.js 20 or later to build the optional browser client. Use a browser with `JSON.rawJSON()` for exact JSON numbers, such as Chrome or Edge 114 or later, Firefox 135 or later, or Safari 18.4 or later.
