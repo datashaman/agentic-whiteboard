@@ -1,0 +1,13 @@
+{
+  "name": "agentic-whiteboard-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run typecheck && node build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.1",
+    "typescript": "5.9.3"
+  }
+}
