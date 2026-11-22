@@ -237,6 +237,10 @@ func (a *api) mutate(
 		}
 		result.PostedAt = result.PostedAt.UTC()
 	case errors.Is(err, pgx.ErrNoRows):
+		// Hold a shared lock until commit so archiving waits for mutations already in progress.
+		if err := access.checkArchive(tx.QueryRow(ctx, boardState+" FOR SHARE", access.ID)); err != nil {
+			return entry{}, err
+		}
 		result, err = change(ctx, tx)
 		if err != nil {
 			return entry{}, err
@@ -364,6 +368,11 @@ func (a *api) take(w http.ResponseWriter, r *http.Request, access boardAccess) {
 			`, access.ID, pattern))
 		})
 	})
+	if wait > 0 && errors.Is(err, pgx.ErrNoRows) {
+		if archiveErr := access.checkArchive(a.db.QueryRow(r.Context(), boardState, access.ID)); archiveErr != nil {
+			err = archiveErr
+		}
+	}
 	writeLookup(w, r, result, err)
 }
 

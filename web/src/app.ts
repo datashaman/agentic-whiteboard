@@ -8,12 +8,14 @@ import {
 } from './tasks';
 
 type View = 'tasks' | 'entries' | 'activity';
+type TaskFilter = 'open' | 'result';
 type ActivityFocus = { entryId: string; operation: BoardEvent['operation'] };
 
 interface Session {
   api: BoardAPI;
   board: Board;
   view: View;
+  taskFilter: TaskFilter;
   issue: string;
   task?: TaskRef;
   pattern: string;
@@ -69,12 +71,15 @@ const boardName = element('board-name');
 const sessionBar = element('session');
 const status = element('board-status');
 const boardError = element('board-error');
+const archivedBanner = element('board-archived');
 const refreshButton = element<HTMLButtonElement>('refresh');
 const browseButton = element<HTMLButtonElement>('browse');
 const postButton = element<HTMLButtonElement>('open-composer');
 const takeId = element<HTMLInputElement>('entry-id');
 const issue = element<HTMLSelectElement>('issue');
 const viewButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('nav [data-view]'));
+const tasks = element('tasks');
+const taskFilters = Array.from(tasks.querySelectorAll<HTMLButtonElement>('[data-task-filter]'));
 const lanes = Array.from(document.querySelectorAll<HTMLElement>('[data-lane]'));
 const entryList = element('entry-list');
 const eventList = element('event-list');
@@ -90,7 +95,7 @@ const clockFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', ti
 let active: Session | undefined;
 
 function has(session: Session, permission: Permission) {
-  return session.board.permissions.includes(permission);
+  return session.board.permissions.includes(permission) && (permission === 'read' || !session.board.archived);
 }
 
 function announce(success = '', failure = '') {
@@ -127,6 +132,7 @@ function report(session: Session, error: unknown, target = boardError) {
     disconnect(error.message);
   } else {
     message(target, errorMessage(error));
+    if (error instanceof APIError && error.code === 'board_archived') void refresh(session);
   }
 }
 
@@ -164,11 +170,16 @@ function tag(text: string, isIssue = false) {
 function renderTasks(session: Session) {
   const visible = session.view === 'tasks';
   const cards = visible && session.loaded ? taskCards(session.taskEvents, session.taskIssues) : [];
+  tasks.dataset.filter = session.taskFilter;
+  for (const filter of taskFilters) {
+    filter.setAttribute('aria-pressed', String(filter.dataset.taskFilter === session.taskFilter));
+  }
   for (const lane of lanes) {
     const container = lane.querySelector('.cards')!;
     const count = lane.querySelector('.count')!;
     container.replaceChildren();
-    if (!visible) continue;
+    lane.hidden = (lane.dataset.lane === 'result') !== (session.taskFilter === 'result');
+    if (!visible || lane.hidden) continue;
     const matches = cards.filter(card => card.lane === lane.dataset.lane && inIssue(session, card.entry));
     count.textContent = String(matches.length);
     count.setAttribute('aria-label', matches.length + ' tasks');
@@ -369,6 +380,11 @@ function renderRecords(session: Session, focus?: ActivityFocus) {
 function render(session: Session, focus?: ActivityFocus) {
   const read = has(session, 'read');
   const view = read || has(session, 'take') ? session.view : undefined;
+  archivedBanner.hidden = !session.board.archived;
+  if (session.board.archived && composer.open) {
+    composer.close();
+    boardName.focus();
+  }
   element('view-bar').hidden = !view;
   for (const item of viewButtons) {
     item.hidden = !read && item.dataset.view !== 'entries';
@@ -376,9 +392,9 @@ function render(session: Session, focus?: ActivityFocus) {
     element(item.dataset.view!).hidden = item.dataset.view !== view;
   }
   element('issue-filter').hidden = !read;
-  element('post-access').hidden = Boolean(view);
+  element('post-access').hidden = Boolean(view) || session.board.archived;
   element('browse-form').hidden = !read;
-  element('take-form').hidden = read;
+  element('take-form').hidden = read || !has(session, 'take');
   element('task-scope').hidden = !session.task;
   element('task-scope-id').textContent = session.task?.id ?? '';
   postButton.hidden = !has(session, 'post');
@@ -413,13 +429,17 @@ async function refresh(session: Session, focus?: ActivityFocus, pages: string[] 
   const selectedTask = session.task;
   const requestedPattern = session.pattern;
   try {
-    if (has(session, 'read')) {
-      let [overview, live, history, focused] = await Promise.all([
-        session.api.overview(view === 'tasks', request.signal),
-        view === 'entries' ? session.api.browse(requestedPattern, request.signal, cursor) : undefined,
-        view === 'activity' ? session.api.history(request.signal, cursor) : undefined,
-        focus ? session.api.history(request.signal, undefined, focus.entryId) : undefined,
-      ]);
+    const canRead = has(session, 'read');
+    let [board, overview, live, history, focused] = await Promise.all([
+      session.api.board(request.signal),
+      canRead ? session.api.overview(view === 'tasks', request.signal) : undefined,
+      canRead && view === 'entries' ? session.api.browse(requestedPattern, request.signal, cursor) : undefined,
+      canRead && view === 'activity' ? session.api.history(request.signal, cursor) : undefined,
+      canRead && focus ? session.api.history(request.signal, undefined, focus.entryId) : undefined,
+    ]);
+    if (active !== session || request.signal.aborted) return;
+    session.board = board;
+    if (overview) {
       const taskIssues = collectTaskIssues(overview.events);
       // A scoped view can skip pages of unrelated summaries.
       if (selectedIssue || selectedTask) {
@@ -443,9 +463,6 @@ async function refresh(session: Session, focus?: ActivityFocus, pages: string[] 
       session.pages = pages;
       session.nextCursor = live?.nextCursor ?? history?.nextCursor;
       refreshIssueOptions(session);
-    } else {
-      await session.api.board();
-      if (active !== session || request.signal.aborted) return;
     }
     session.loaded = true;
   } catch (error) {
@@ -535,7 +552,7 @@ loginForm.onsubmit = async event => {
     const api = new BoardAPI(slug, token);
     const board = await api.board();
     const session: Session = {
-      api, board, view: board.permissions.includes('read') ? 'tasks' : 'entries',
+      api, board, view: board.permissions.includes('read') ? 'tasks' : 'entries', taskFilter: 'open',
       issue: '', pattern: '{}', entries: [], events: [], taskEvents: [], issues: [],
       taskIssues: collectTaskIssues([]), pages: [],
       loaded: false, mutating: false,
@@ -572,6 +589,13 @@ refreshButton.onclick = () => {
 for (const item of viewButtons) {
   item.onclick = () => {
     if (active) showView(active, item.dataset.view as View);
+  };
+}
+for (const filter of taskFilters) {
+  filter.onclick = () => {
+    if (!active) return;
+    active.taskFilter = filter.dataset.taskFilter as TaskFilter;
+    renderTasks(active);
   };
 }
 issue.onchange = () => {

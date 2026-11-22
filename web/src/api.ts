@@ -6,6 +6,7 @@ export interface Board {
   name: string;
   actor: string;
   permissions: Permission[];
+  archived: boolean;
 }
 
 export interface Entry {
@@ -79,8 +80,8 @@ export class BoardAPI {
     this.path = '/api/boards/' + encodeURIComponent(slug);
   }
 
-  board() {
-    return this.request<Board>('');
+  board(signal?: AbortSignal) {
+    return this.request<Board>('', undefined, signal);
   }
 
   browse(pattern: string, signal: AbortSignal, cursor?: string) {

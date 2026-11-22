@@ -21,7 +21,7 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-const usage = "usage: whiteboard serve | migrate | board create SLUG NAME | token issue SLUG ACTOR post,read,take | token revoke SLUG ID"
+const usage = "usage: whiteboard serve | migrate | board create SLUG NAME | board archive SLUG | board reopen SLUG | token issue SLUG ACTOR post,read,take | token revoke SLUG ID"
 
 var slugPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
@@ -40,6 +40,17 @@ func runOperator(ctx context.Context, db *pgxpool.Pool, output io.Writer, args [
 			return errors.New("board create requires a URL slug and a nonempty name")
 		}
 		_, err := db.Exec(ctx, "INSERT INTO boards (slug, name) VALUES ($1, $2)", args[2], args[3])
+		return err
+	case len(args) == 3 && args[0] == "board" && (args[1] == "archive" || args[1] == "reopen"):
+		archived := args[1] == "archive"
+		tag, err := db.Exec(ctx, `
+			UPDATE boards SET archived = $2,
+				archive_generation = archive_generation + CASE WHEN $2 AND NOT archived THEN 1 ELSE 0 END
+			WHERE slug = $1
+		`, args[2], archived)
+		if err == nil && tag.RowsAffected() == 0 {
+			return errors.New("board not found")
+		}
 		return err
 	case len(args) == 5 && args[0] == "token" && args[1] == "issue":
 		if strings.TrimSpace(args[3]) == "" {

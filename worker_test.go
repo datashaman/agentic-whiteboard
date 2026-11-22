@@ -43,7 +43,12 @@ func TestExampleWorkerTakesMatchingWorkAndPostsResult(t *testing.T) {
 	if output, err := run(taker); err == nil || !strings.Contains(string(output), "needs both Take and Post") {
 		t.Fatalf("take-only worker should fail before claiming: %v\n%s", err, output)
 	}
+	f.operator(t, "board", "archive", "demo")
+	if output, err := run(worker); err == nil || !strings.Contains(string(output), "Board archived") {
+		t.Fatalf("worker should stop on an archived board: %v\n%s", err, output)
+	}
 	assertEntries(t, f.browse(t, poster, `{"action":"uppercase"}`), work.ID)
+	f.operator(t, "board", "reopen", "demo")
 	if output, err := run(worker); err != nil {
 		t.Fatalf("run worker: %v\n%s", err, output)
 	}

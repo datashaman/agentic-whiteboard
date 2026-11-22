@@ -51,6 +51,7 @@
           <button id="open-composer" type="button" class="primary" hidden><span aria-hidden="true">＋</span> Post entry</button>
         </div>
       </header>
+      <p id="board-archived" class="notice" role="status" hidden>Archived · Read only</p>
       <p id="board-status" class="notice" role="status" hidden></p>
       <p id="board-error" class="notice error" role="alert" hidden></p>
       <div id="view-bar" class="view-bar">
@@ -64,19 +65,25 @@
           <select id="issue"><option value="">All issues</option></select>
         </div>
       </div>
-      <div id="tasks" class="lanes" role="region" aria-label="Tasks">
-        <section class="lane" data-lane="available" aria-labelledby="available-title">
-          <header><h2 id="available-title">Available</h2><span class="count" aria-label="0 tasks">0</span></header>
-          <div class="cards"></div>
-        </section>
-        <section class="lane" data-lane="taken" aria-labelledby="taken-title">
-          <header><h2 id="taken-title">Taken</h2><span class="count" aria-label="0 tasks">0</span></header>
-          <div class="cards"></div>
-        </section>
-        <section class="lane" data-lane="result" aria-labelledby="result-title">
-          <header><h2 id="result-title">Result posted</h2><span class="count" aria-label="0 tasks">0</span></header>
-          <div class="cards"></div>
-        </section>
+      <div id="tasks" class="task-view" role="region" aria-label="Tasks" data-filter="open">
+        <div class="controls task-filters" role="group" aria-label="Task filter">
+          <button type="button" data-task-filter="open" aria-pressed="true">Open work</button>
+          <button type="button" data-task-filter="result" aria-pressed="false">Result posted</button>
+        </div>
+        <div class="lanes">
+          <section class="lane" data-lane="available" aria-labelledby="available-title">
+            <header><h2 id="available-title">Available</h2><span class="count" aria-label="0 tasks">0</span></header>
+            <div class="cards"></div>
+          </section>
+          <section class="lane" data-lane="taken" aria-labelledby="taken-title">
+            <header><h2 id="taken-title">Taken</h2><span class="count" aria-label="0 tasks">0</span></header>
+            <div class="cards"></div>
+          </section>
+          <section class="lane" data-lane="result" aria-labelledby="result-title" hidden>
+            <header><h2 id="result-title">Result posted</h2><span class="count" aria-label="0 tasks">0</span></header>
+            <div class="cards"></div>
+          </section>
+        </div>
       </div>
       <section id="entries" class="record-view" aria-label="Live entries" hidden>
         <form id="browse-form" class="sheet query-form">

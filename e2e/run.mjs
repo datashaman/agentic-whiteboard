@@ -56,6 +56,9 @@ try {
   const pagingBoard = board + "-paging";
   run(binary, ["board", "create", pagingBoard, "Paged whiteboard"]);
   const pagingToken = issueToken("Maintainer", "read,post,take", pagingBoard);
+  const archiveBoard = board + "-archive";
+  run(binary, ["board", "create", archiveBoard, "Whiteboard archive test"]);
+  const archiveToken = issueToken("Maintainer", "read,post,take", archiveBoard);
 
   const socket = createServer().listen(0, "127.0.0.1");
   await once(socket, "listening");
@@ -86,6 +89,8 @@ try {
       WHITEBOARD_E2E_DRAFT_REVIEWER_TOKEN: draftReviewerToken,
       WHITEBOARD_E2E_PAGING_BOARD: pagingBoard,
       WHITEBOARD_E2E_PAGING_TOKEN: pagingToken,
+      WHITEBOARD_E2E_ARCHIVE_BOARD: archiveBoard,
+      WHITEBOARD_E2E_ARCHIVE_TOKEN: archiveToken,
     },
   });
   const forwardSignal = (signal) => tests.kill(signal);
