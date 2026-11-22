@@ -1,6 +1,6 @@
 import {
   APIError, BoardAPI, jsonObject,
-  type Board, type BoardEvent, type Entry, type Permission,
+  type Board, type BoardEvent, type Entry, type Payload, type Permission,
 } from './api';
 import {
   collectTaskIssues, issueLabel, issueOf, matchesTask, relatedIssue, taskCards,
@@ -78,6 +78,8 @@ const composer = element<HTMLDialogElement>('composer');
 const postError = element('post-error');
 const payloadEditor = element<HTMLTextAreaElement>('payload');
 const takenEntry = element<HTMLDialogElement>('taken-entry');
+const takenPayload = element('taken-payload');
+const takenLinks = element('taken-links');
 const clockFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
 let active: Session | undefined;
@@ -103,7 +105,9 @@ function disconnect(reason = '') {
   eventList.replaceChildren();
   for (const lane of lanes) lane.querySelector('.cards')!.replaceChildren();
   payloadEditor.value = '{}';
-  element('taken-payload').textContent = '';
+  takenPayload.textContent = '';
+  takenLinks.replaceChildren();
+  takenLinks.hidden = true;
   takeId.value = '';
   document.title = 'Agentic Whiteboard';
   announce();
@@ -191,6 +195,33 @@ function timestamp(iso: string) {
   return time;
 }
 
+function renderPayload(raw: HTMLElement, links: HTMLElement, payload: Payload) {
+  const urls = new Set<string>();
+  raw.textContent = JSON.stringify(payload, (_key, value: unknown) => {
+    if (typeof value === 'string' && /^https:\/\//i.test(value)) {
+      try {
+        const url = new URL(value);
+        if (!url.username && !url.password) urls.add(url.href);
+      } catch {
+        // Malformed URLs stay visible as text.
+      }
+    }
+    return value;
+  }, 2);
+  const items = document.createDocumentFragment();
+  for (const url of urls) {
+    const link = node('a', '', 'Open ' + url);
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    const item = node('li');
+    item.append(link);
+    items.append(item);
+  }
+  links.replaceChildren(items);
+  links.hidden = urls.size === 0;
+}
+
 function record(entry: Entry, openId: string | undefined, action?: HTMLButtonElement, event?: BoardEvent) {
   const details = node('details', 'record');
   details.dataset.id = event?.id ?? entry.id;
@@ -219,9 +250,11 @@ function record(entry: Entry, openId: string | undefined, action?: HTMLButtonEle
       return;
     }
     if (body.parentElement) return;
-    const raw = node('pre', '', JSON.stringify(entry.payload, null, 2));
+    const raw = node('pre');
     raw.setAttribute('aria-label', 'Entry JSON');
-    body.replaceChildren(raw);
+    const links = node('ul', 'entry-links');
+    renderPayload(raw, links, entry.payload);
+    body.replaceChildren(raw, links);
     if (action) body.append(action);
     details.append(body);
   }
@@ -372,7 +405,7 @@ async function take(session: Session, entryId: string, control: HTMLButtonElemen
     }
     if (active !== session) return;
     element('taken-entry-id').textContent = 'ID ' + entry.id;
-    element('taken-payload').textContent = JSON.stringify(entry.payload, null, 2);
+    renderPayload(takenPayload, takenLinks, entry.payload);
     takenEntry.showModal();
     announce('Took entry ' + entry.id + '.');
     await refresh(session);

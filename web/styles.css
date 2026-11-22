@@ -201,6 +201,8 @@ summary:focus-visible { outline-offset: -3px; }
 .summary-meta time { color: var(--muted); font-size: 12px; }
 .record-body { display: grid; gap: 12px; padding: 0 16px 16px; }
 .record-body button { justify-self: start; }
+.entry-links { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 13px; overflow-wrap: anywhere; }
+.entry-links a { color: var(--accent-deep); }
 .event-actor { color: var(--secondary); font-size: 14px; font-weight: 700; }
 .event-verb { color: var(--muted); font-size: 14px; }
 pre {

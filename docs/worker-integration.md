@@ -44,3 +44,5 @@ Use a fresh request ID and task ID to queue another item. Reuse the original req
 See the [API reference](../README.md#connect-an-agent) for request shapes. Post and Take require an `Idempotency-Key`. If the reply is lost, retry with the same key and body. A client that resumes across process restarts should persist both before sending the request.
 
 A successful Take removes the work from the live space. If the agent stops before posting a result, a participant with Read and Post can find the original entry in Activity and repost it with a fresh ID.
+
+For jobs that hand off files, see the [private file handoff](file-handoff.md) example.

@@ -50,6 +50,7 @@ try {
   run(binary, ["board", "create", board, "Whiteboard browser test"]);
   const browserToken = issueToken("Maintainer", "read,post");
   const agentToken = issueToken("README Agent", "read,post,take");
+  const observerToken = issueToken("Board observer", "read");
 
   const socket = createServer().listen(0, "127.0.0.1");
   await once(socket, "listening");
@@ -75,6 +76,7 @@ try {
       WHITEBOARD_E2E_BOARD: board,
       WHITEBOARD_E2E_BROWSER_TOKEN: browserToken,
       WHITEBOARD_E2E_AGENT_TOKEN: agentToken,
+      WHITEBOARD_E2E_OBSERVER_TOKEN: observerToken,
     },
   });
   const forwardSignal = (signal) => tests.kill(signal);
