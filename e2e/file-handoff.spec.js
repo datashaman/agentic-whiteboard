@@ -15,12 +15,16 @@ const worker = fileURLToPath(new URL("../examples/file-worker.mjs", import.meta.
 async function storeAddress(process) {
   const lines = createInterface({ input: process.stderr });
   const timer = setTimeout(() => process.kill(), 5000);
+  const recent = [];
   try {
     for await (const line of lines) {
-      const url = line.match(/WebDav Server started on \[(https:\/\/127\.0\.0\.1:\d+\/)\]/)?.[1];
+      // Older rclone releases print one address without the surrounding brackets.
+      const url = line.match(/WebDav Server started on \[?(https:\/\/127\.0\.0\.1:\d+\/)/)?.[1];
       if (url) return url;
+      recent.push(line);
+      if (recent.length > 6) recent.shift();
     }
-    throw new Error("rclone did not announce its HTTPS address.");
+    throw new Error(["rclone did not announce its HTTPS address.", ...recent].join("\n"));
   } finally {
     clearTimeout(timer);
     lines.close();
