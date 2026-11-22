@@ -102,6 +102,26 @@ function has(session: Session, permission: Permission) {
   return session.view.can(permission);
 }
 
+function isEntryId(value: unknown): value is string {
+  return typeof value === 'string' && /^[1-9]\d{0,18}$/.test(value) && BigInt(value) <= 9_223_372_036_854_775_807n;
+}
+
+function boardHref(slug: string, focus?: ActivityFocus) {
+  const path = '/boards/' + encodeURIComponent(slug);
+  if (!focus) return path;
+  const query = new URLSearchParams({ entry: focus.entryId });
+  if (focus.operation) query.set('event', focus.operation);
+  return path + '?' + query;
+}
+
+function recordLink(session: Session, label: string, focus: ActivityFocus) {
+  const link = node('a', '', label);
+  link.href = boardHref(session.view.board.id, focus);
+  const item = node('li');
+  item.append(link);
+  return item;
+}
+
 function announce(success = '', failure = '') {
   message(status, success);
   message(boardError, failure);
@@ -254,7 +274,11 @@ function record(session: Session, entry: Entry, openId: string | undefined,
   details.dataset.id = event?.id ?? entry.id;
   details.name = event ? 'activity-record' : 'live-record';
   const summary = node('summary');
-  if (event) summary.onclick = () => session.view.dismissFocus();
+  if (event) summary.onclick = () => {
+    if (!session.view.current.focus) return;
+    session.view.dismissFocus();
+    history.replaceState(null, '', boardHref(session.view.board.id));
+  };
   const label = node('span', 'summary-label');
   if (event) {
     label.append(
@@ -283,6 +307,14 @@ function record(session: Session, entry: Entry, openId: string | undefined,
     raw.setAttribute('aria-label', 'Entry JSON');
     const links = node('ul', 'entry-links');
     renderPayload(raw, links, payload.payload);
+    const source = payload.payload.sourceEntryId;
+    if (isEntryId(source) && source !== entry.id) {
+      links.prepend(recordLink(session, 'View source work (entry ' + source + ')', { entryId: source }));
+    }
+    links.prepend(recordLink(session, event ? 'Link to this event' : 'Link to this entry', {
+      entryId: entry.id, operation: event?.operation,
+    }));
+    links.hidden = false;
     body.replaceChildren(raw, links);
     if (payload.expiresAt) {
       const deadline = node('p', 'hint', 'Available until ');
@@ -351,6 +383,11 @@ function renderRecords(session: Session) {
   } else if (current.view === 'activity') {
     const selected = focusedRecord?.id ?? openId;
     const events = session.view.activity;
+    if (current.focus && !loading && !focusedRecord) {
+      const unavailable = node('p', 'empty', 'The linked Activity record is unavailable on this board.');
+      unavailable.setAttribute('role', 'status');
+      list.append(unavailable);
+    }
     for (const event of events) {
       const action = event.operation === 'take' && has(session, 'post')
         ? () => button('Repost', control => void repost(session, event.entry.id, control))
@@ -413,7 +450,11 @@ function render(session: Session) {
 }
 
 async function navigate(session: Session, action: ViewAction) {
-  if (session.view.select(action)) await refresh(session);
+  const previous = session.view.current.focus;
+  const reload = session.view.select(action);
+  const { focus } = session.view.current;
+  if (previous !== focus) history.replaceState(null, '', boardHref(session.view.board.id, focus));
+  if (reload) await refresh(session);
   else if (active === session) render(session);
 }
 
@@ -488,8 +529,9 @@ async function repost(session: Session, entryId: string, control: HTMLButtonElem
 }
 
 const boardPath = /^\/boards\/([^/]+)\/?$/.exec(location.pathname)?.[1];
+let urlBoardSlug: string | undefined;
 try {
-  if (boardPath) slugInput.value = decodeURIComponent(boardPath);
+  if (boardPath) slugInput.value = urlBoardSlug = decodeURIComponent(boardPath);
 } catch {
   message(loginError, 'Enter a valid board slug.');
 }
@@ -503,7 +545,21 @@ async function connect({ slug, token }: BoardConnection) {
     const api = new BoardAPI(slug, token);
     const board = await api.board();
     const session: Session = { api, view: new BoardView(api, board), mutating: false };
-    history.replaceState(null, '', '/boards/' + encodeURIComponent(board.id));
+    const query = new URLSearchParams(urlBoardSlug === board.id ? location.search : '');
+    let focus: ActivityFocus | undefined;
+    let linkError = '';
+    if (query.has('entry') || query.has('event')) {
+      const entryId = query.get('entry');
+      const operation = query.get('event');
+      if (isEntryId(entryId) && (operation === null || operation === 'post' || operation === 'take')) {
+        focus = { entryId, operation: operation ?? undefined };
+        if (!has(session, 'read')) linkError = 'Read access is required to open this Activity link.';
+      } else {
+        linkError = 'This Activity link is invalid.';
+      }
+    }
+    history.replaceState(null, '', boardHref(board.id, focus));
+    urlBoardSlug = board.id;
     saveConnection({ slug: board.id, token });
     tokenInput.value = '';
     boardName.textContent = board.name;
@@ -516,8 +572,10 @@ async function connect({ slug, token }: BoardConnection) {
     login.hidden = true;
     workspace.hidden = false;
     sessionBar.hidden = false;
-    void refresh(session);
     boardName.focus();
+    announce('', linkError);
+    if (focus && has(session, 'read')) void focusActivity(session, focus);
+    else void refresh(session);
   } catch (error) {
     if (error instanceof APIError && error.status === 401) {
       const saved = savedConnection();

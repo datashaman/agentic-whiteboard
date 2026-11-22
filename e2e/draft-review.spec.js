@@ -8,7 +8,7 @@ import { numberText, parseExactJSON } from "../shared/exact-json.mjs";
 const exec = promisify(execFile);
 const worker = fileURLToPath(new URL("../examples/draft-review-worker.mjs", import.meta.url));
 
-test("the draft writer can stop after Take and hand off a recovered draft to the reviewer", async ({ page, request }) => {
+test("the draft writer can stop after Take and hand off a recovered draft to the reviewer", async ({ browser, page, request }) => {
   const board = "/boards/" + process.env.WHITEBOARD_E2E_BOARD;
   const api = process.env.WHITEBOARD_E2E_URL + "/api" + board;
   const token = process.env.WHITEBOARD_E2E_BROWSER_TOKEN;
@@ -75,4 +75,34 @@ test("the draft writer can stop after Take and hand off a recovered draft to the
     } },
   });
   expect(numberText(review.entry.payload.issue)).toBe(issue);
+
+  await button("Activity").click();
+  await activity.getByText("Draft review", { exact: true }).click();
+  const permalink = await activity.locator("details[open]").getByRole("link", { name: "Link to this event" }).getAttribute("href");
+  expect(permalink).toBe(board + "?entry=" + review.entry.id + "&event=post");
+
+  const observer = await browser.newContext();
+  try {
+    const shared = await observer.newPage();
+    await shared.goto(new URL(permalink, process.env.WHITEBOARD_E2E_URL).href);
+    await expect(shared.getByLabel("Access token")).toBeVisible();
+    await shared.getByLabel("Access token").fill(process.env.WHITEBOARD_E2E_OBSERVER_TOKEN);
+    await shared.getByRole("button", { name: "Connect" }).click();
+    const linked = shared.getByRole("region", { name: "Activity" }).locator("details[open]");
+    const record = linked.getByLabel("Entry JSON");
+    await expect(linked.locator("summary")).toContainText(/Draft reviewer\s*posted\s*Draft review/);
+    await expect(record).toContainText(review.entry.payload.feedback[0]);
+
+    await linked.getByRole("link", { name: "View source work (entry " + revision.entry.id + ")" }).click();
+    await expect(shared).toHaveURL(new URL(board + "?entry=" + revision.entry.id, shared.url()).href);
+    await expect(linked.locator("summary")).toContainText(/Draft reviewer\s*took\s*Review the revised draft/);
+    await expect(record).toContainText(revision.entry.payload.text);
+    await expect(linked.getByRole("button", { name: "Repost", exact: true })).toHaveCount(0);
+
+    await linked.getByRole("link", { name: "View source work (entry " + replacement.entry.id + ")" }).click();
+    await expect(linked.locator("summary")).toContainText(/Draft writer\s*took\s*Revise the release note/);
+    await expect(record).toContainText(draft.text);
+  } finally {
+    await observer.close();
+  }
 });
