@@ -262,6 +262,30 @@ func TestBrowseMatchesExactTopLevelValuesOldestFirst(t *testing.T) {
 	}
 }
 
+func TestBrowseMatchesEquivalentLongExponents(t *testing.T) {
+	f := newAPIFixture(t)
+	_, token := f.token(t, "demo", "Alice", "post,read")
+	nines := strings.Repeat("9", 4096)
+	powerOfTen := "1" + strings.Repeat("0", 4096)
+	tests := []struct{ name, value, equivalent string }{
+		{"positive-carry", "10e+" + nines, "1e" + powerOfTen},
+		{"positive-borrow", "0.1e" + powerOfTen, "1e" + nines},
+		{"negative-carry", "0.1e-" + nines, "1e-" + powerOfTen},
+		{"negative-borrow", "10e-" + powerOfTen, "1e-" + nines},
+	}
+	for _, tc := range tests {
+		f.post(t, token, tc.name, `{"value":`+tc.value+`}`)
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			matches := f.browse(t, token, `{"value":`+tc.equivalent+`}`)
+			if len(matches) != 1 || string(matches[0].Payload) != `{"value":`+tc.value+`}` {
+				t.Fatalf("expected one match for %s, got %d", tc.name, len(matches))
+			}
+		})
+	}
+}
+
 func TestReadReturnsOldestMatchWithoutTakingIt(t *testing.T) {
 	f := newAPIFixture(t)
 	_, token := f.token(t, "demo", "Alice", "post,read")

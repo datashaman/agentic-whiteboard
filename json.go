@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
@@ -84,14 +83,50 @@ func canonicalNumber(number string) string {
 		return "0"
 	}
 	significant := strings.TrimRight(digits, "0")
-	power := new(big.Int)
-	if exponent != "" {
-		// The JSON decoder has already validated the exponent's syntax.
-		power.SetString(exponent, 10)
-	}
-	power.Add(power, big.NewInt(int64(len(digits)-len(significant)-len(fraction))))
+	power := shiftExponent(exponent, len(digits)-len(significant)-len(fraction))
 	if negative {
 		significant = "-" + significant
 	}
-	return significant + "e" + power.String()
+	return significant + "e" + power
+}
+
+// Exponents can be as long as the input. Adjust their decimal digits directly
+// so normalization stays linear and does not expand the represented number.
+func shiftExponent(exponent string, offset int) string {
+	negative := strings.HasPrefix(exponent, "-")
+	digits := strings.TrimLeft(exponent, "+-0")
+	if len(digits) <= 9 {
+		value, _ := strconv.Atoi(digits)
+		if negative {
+			value = -value
+		}
+		return strconv.Itoa(value + offset)
+	}
+
+	// The mantissa offset is bounded by the request size, so it cannot change this sign.
+	if negative {
+		offset = -offset
+	}
+	adjusted := []byte(digits)
+	for i := len(adjusted) - 1; i >= 0 && offset != 0; i-- {
+		value := int(adjusted[i]-'0') + offset
+		digit := value % 10
+		offset = value / 10
+		if digit < 0 {
+			digit += 10
+			offset--
+		}
+		adjusted[i] = byte(digit) + '0'
+	}
+
+	result := string(adjusted)
+	if offset > 0 {
+		result = "1" + result
+	} else {
+		result = strings.TrimLeft(result, "0")
+	}
+	if negative {
+		return "-" + result
+	}
+	return result
 }

@@ -6,7 +6,7 @@ A shared, Linda-style whiteboard for people and agents. Participants post JSON o
 
 ## Run locally
 
-You need Go and PostgreSQL for the service, plus Node.js 20 or later to build the optional browser client.
+You need Go 1.25 or later and PostgreSQL for the service, plus Node.js 20 or later to build the optional browser client. Use a browser with `JSON.rawJSON()` for exact JSON numbers, such as Chrome or Edge 114 or later, Firefox 135 or later, or Safari 18.4 or later.
 
 ```sh
 createdb agentic_whiteboard

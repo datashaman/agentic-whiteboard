@@ -2,7 +2,10 @@ import {
   APIError, BoardAPI, jsonObject,
   type Board, type BoardEvent, type Entry, type Permission,
 } from './api';
-import { issueLabel, issueOf, matchesTask, taskCards, type TaskRef } from './tasks';
+import {
+  collectTaskIssues, issueLabel, issueOf, matchesTask, relatedIssue, taskCards,
+  type TaskIssues, type TaskRef,
+} from './tasks';
 
 type View = 'tasks' | 'entries' | 'activity';
 
@@ -16,6 +19,7 @@ interface Session {
   entries: Entry[];
   matching: Entry[];
   events: BoardEvent[];
+  taskIssues: TaskIssues;
   refresh?: AbortController;
   loaded: boolean;
   mutating: boolean;
@@ -130,7 +134,7 @@ function refreshIssueOptions(session: Session) {
 }
 
 function inIssue(session: Session, entry: Entry) {
-  return session.issue === '' || issueOf(entry.payload) === session.issue;
+  return session.issue === '' || relatedIssue(entry.payload, session.taskIssues) === session.issue;
 }
 
 function titleOf(entry: Entry): string {
@@ -146,7 +150,7 @@ function tag(text: string, isIssue = false) {
 
 function renderTasks(session: Session) {
   const visible = session.view === 'tasks';
-  const cards = visible ? taskCards(session.entries, session.events) : [];
+  const cards = visible ? taskCards(session.entries, session.events, session.taskIssues) : [];
   for (const lane of lanes) {
     const container = lane.querySelector('.cards')!;
     const count = lane.querySelector('.count')!;
@@ -252,7 +256,7 @@ function renderRecords(session: Session, takenId?: string) {
     if (!events.length) list.append(node('p', 'empty', 'No activity for this selection.'));
   } else {
     const entries = session.matching.filter(entry =>
-      inIssue(session, entry) && (!session.task || matchesTask(entry.payload, session.task)),
+      inIssue(session, entry) && (!session.task || matchesTask(entry.payload, session.task, session.taskIssues)),
     );
     for (const entry of entries) {
       const action = has(session, 'take')
@@ -314,6 +318,7 @@ async function refresh(session: Session, takenId?: string) {
       const taken = new Set(session.events.filter(event => event.operation === 'take').map(event => event.entry.id));
       // Browse and History can straddle a take. A recorded take is authoritative.
       session.entries = (live.entries ?? []).filter(entry => !taken.has(entry.id));
+      session.taskIssues = collectTaskIssues(session.entries, session.events);
       session.matching = session.pattern === '{}' ? session.entries : (matching.entries ?? []).filter(entry => !taken.has(entry.id));
       refreshIssueOptions(session);
     } else {
@@ -410,7 +415,8 @@ loginForm.onsubmit = async event => {
     const board = await api.board();
     const session: Session = {
       api, board, view: board.permissions.includes('read') ? 'tasks' : 'entries',
-      issue: '', pattern: '{}', entries: [], matching: [], events: [], loaded: false, mutating: false,
+      issue: '', pattern: '{}', entries: [], matching: [], events: [], taskIssues: new Map(),
+      loaded: false, mutating: false,
     };
     history.replaceState(null, '', '/boards/' + encodeURIComponent(board.id));
     tokenInput.value = '';

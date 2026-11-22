@@ -54,12 +54,13 @@ export function numberText(value: unknown): string {
 
 function parseResponse(text: string): unknown {
   const rawJSON = losslessJSON.rawJSON;
-  if (!rawJSON || !losslessJSON.isRawJSON) {
-    throw new Error('This browser cannot open whiteboards with exact JSON numbers. Update your browser and try again.');
-  }
   return JSON.parse(text, (_key: string, value: unknown, context?: { source?: string }) => {
+    if (typeof value !== 'number') return value;
     // PostgreSQL numbers can exceed JavaScript's precision, including in recovered entries.
-    return typeof value === 'number' ? rawJSON(context!.source!) : value;
+    if (!rawJSON || !losslessJSON.isRawJSON || context?.source === undefined) {
+      throw new Error('This browser cannot open whiteboards with exact JSON numbers. Update your browser and try again.');
+    }
+    return rawJSON(context.source);
   });
 }
 

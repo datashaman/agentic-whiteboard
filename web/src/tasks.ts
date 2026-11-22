@@ -7,6 +7,8 @@ export interface TaskRef {
   issue: string;
 }
 
+export type TaskIssues = ReadonlyMap<string, string | null>;
+
 interface TaskCard {
   ref: TaskRef;
   entry: Entry;
@@ -20,28 +22,88 @@ interface PositionedEvent {
 }
 
 export function issueOf(payload: Payload): string {
-  return typeof payload.issue === 'string' ? payload.issue : numberText(payload.issue);
+  if (typeof payload.issue === 'string') return payload.issue;
+  const number = numberText(payload.issue);
+  return number ? normalizedIssueNumber(number) : '';
+}
+
+function normalizedIssueNumber(number: string): string {
+  const sign = number.startsWith('-') ? '-' : '';
+  const [mantissa = '', exponent = ''] = number.slice(sign.length).split(/[eE]/);
+  const [whole = '', fraction = ''] = mantissa.split('.');
+  const digits = (whole + fraction).replace(/^0+/, '');
+  if (!digits) return '0';
+  let end = digits.length;
+  while (digits[end - 1] === '0') end--;
+  const significant = sign + digits.slice(0, end);
+  const power = shiftExponent(exponent, digits.length - end - fraction.length);
+
+  // Keep ordinary integer issue numbers readable without expanding large exponents.
+  if (power.length <= 2) {
+    const zeros = Number(power);
+    if (zeros >= 0 && zeros <= 20) return significant + '0'.repeat(zeros);
+  }
+  return significant + 'e' + power;
+}
+
+function shiftExponent(exponent: string, offset: number): string {
+  const negative = exponent.startsWith('-');
+  const digits = exponent.replace(/^[+-]?0*/, '');
+  if (digits.length <= 9) return String((negative ? -1 : 1) * Number(digits) + offset);
+
+  if (negative) offset = -offset;
+  const suffix: string[] = [];
+  let end = digits.length;
+  while (end > 0 && offset !== 0) {
+    const value = Number(digits[--end]) + offset;
+    const digit = (value % 10 + 10) % 10;
+    suffix.push(String(digit));
+    offset = (value - digit) / 10;
+  }
+  const adjusted = digits.slice(0, end) + suffix.reverse().join('');
+  const magnitude = offset > 0 ? '1' + adjusted : adjusted.replace(/^0+/, '');
+  return negative ? '-' + magnitude : magnitude;
 }
 
 export function issueLabel(issue: string): string {
   return /^\d+$/.test(issue) ? '#' + issue : issue;
 }
 
-export function taskOf(payload: Payload): TaskRef | undefined {
+function taskOf(payload: Payload): TaskRef | undefined {
   if (typeof payload.task !== 'string' || !payload.task.trim()) return;
   return { id: payload.task, issue: issueOf(payload) };
 }
 
-export function matchesTask(payload: Payload, task: TaskRef): boolean {
-  const entryIssue = issueOf(payload);
-  return payload.task === task.id && (!entryIssue || entryIssue === task.issue);
+export function collectTaskIssues(entries: Entry[], events: BoardEvent[]): TaskIssues {
+  const issues = new Map<string, string | null>();
+  function track(entry: Entry) {
+    if (entry.payload.kind !== 'work') return;
+    const ref = taskOf(entry.payload);
+    if (!ref) return;
+    const previous = issues.get(ref.id);
+    issues.set(ref.id, previous === undefined || previous === ref.issue ? ref.issue : null);
+  }
+  for (const entry of entries) track(entry);
+  for (const { entry } of events) track(entry);
+  return issues;
+}
+
+export function relatedIssue(payload: Payload, taskIssues: TaskIssues): string | null {
+  const issue = issueOf(payload);
+  if (issue || payload.kind === 'work' || typeof payload.task !== 'string') return issue;
+  const taskIssue = taskIssues.get(payload.task);
+  return taskIssue === undefined ? '' : taskIssue;
+}
+
+export function matchesTask(payload: Payload, task: TaskRef, taskIssues: TaskIssues): boolean {
+  return payload.task === task.id && relatedIssue(payload, taskIssues) === task.issue;
 }
 
 function taskKey(ref: TaskRef): string {
   return JSON.stringify([ref.issue, ref.id]);
 }
 
-export function taskCards(entries: Entry[], events: BoardEvent[]): TaskCard[] {
+export function taskCards(entries: Entry[], events: BoardEvent[], taskIssues: TaskIssues): TaskCard[] {
   const liveWork = new Map<string, Entry>();
   const historicalWork = new Map<string, Entry>();
   const posts = new Map<string, PositionedEvent>();
@@ -64,26 +126,21 @@ export function taskCards(entries: Entry[], events: BoardEvent[]): TaskCard[] {
     if (!ref) continue;
     const key = taskKey(ref);
     if (entry.payload.kind === 'work' && !historicalWork.has(key)) historicalWork.set(key, entry);
-    if (entry.payload.kind === 'result' && !results.has(key)) results.set(key, { event, index });
+    if (entry.payload.kind === 'result') {
+      const issue = relatedIssue(entry.payload, taskIssues);
+      if (issue === null) continue;
+      const resultKey = taskKey({ id: ref.id, issue });
+      if (!results.has(resultKey)) results.set(resultKey, { event, index });
+    }
   }
 
   const work = new Map([...historicalWork, ...liveWork]);
-  const taskOccurrences = new Map<string, number>();
-  for (const entry of work.values()) {
-    const { id } = taskOf(entry.payload)!;
-    taskOccurrences.set(id, (taskOccurrences.get(id) ?? 0) + 1);
-  }
-
   const cards: TaskCard[] = [];
   for (const [key, entry] of work) {
     const ref = taskOf(entry.payload)!;
     const posted = posts.get(entry.id);
     const taken = takes.get(entry.id);
-    const scoped = results.get(key);
-    const unscoped = taskOccurrences.get(ref.id) === 1
-      ? results.get(taskKey({ id: ref.id, issue: '' }))
-      : undefined;
-    const result = (scoped?.index ?? Infinity) < (unscoped?.index ?? Infinity) ? scoped : unscoped;
+    const result = results.get(key);
 
     if (liveWork.has(key)) {
       cards.push({ ref, entry, lane: 'available', attribution: posted ? 'Posted by ' + posted.event.actor : 'Ready to take' });

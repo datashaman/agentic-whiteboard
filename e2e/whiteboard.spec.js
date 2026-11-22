@@ -20,15 +20,19 @@ const sibling = {
 };
 const unrelated = {
   kind: "work",
-  task: "check-license",
+  task: sibling.task,
   issue: 43,
   title: "Check the project license",
 };
 const note = {
   kind: "note",
   task: work.task,
-  issue: work.issue,
   title: "Installation notes for the README",
+};
+const ambiguousNote = {
+  kind: "note",
+  task: sibling.task,
+  title: "Notes with two possible issues",
 };
 const workPattern = { kind: "work", task: work.task, issue: work.issue };
 
@@ -54,7 +58,7 @@ test("a maintainer follows two tasks on one issue through agent handoff and reco
   async function mutate(operation, data, status) {
     const response = await agent.post(`${apiPath}/${operation}`, {
       data,
-      headers: { "Idempotency-Key": randomUUID() },
+      headers: { "Content-Type": "application/json", "Idempotency-Key": randomUUID() },
     });
     expect(response.status(), `Agent ${operation}`).toBe(status);
     return response.json();
@@ -68,7 +72,7 @@ test("a maintainer follows two tasks on one issue through agent handoff and reco
 
   try {
     await test.step("Post work in the browser and follow it from the issue to its live entries", async () => {
-      for (const payload of [sibling, unrelated, note]) {
+      for (const payload of [sibling, unrelated, note, ambiguousNote]) {
         await mutate("entries", { payload }, 201);
       }
 
@@ -104,6 +108,8 @@ test("a maintainer follows two tasks on one issue through agent handoff and reco
       await button("Activity").click();
       await refresh();
       await expect(issue).toHaveValue(String(work.issue));
+      await expect(activity.getByText(note.title, { exact: true })).toBeVisible();
+      await expect(activity.getByText(ambiguousNote.title, { exact: true })).toHaveCount(0);
 
       await originalTake.getByText(work.title, { exact: true }).click();
       const raw = originalTake.getByLabel("Entry JSON", { exact: true });
@@ -142,23 +148,38 @@ test("a maintainer follows two tasks on one issue through agent handoff and reco
     await test.step("Post a result through the API and advance only the matching task card", async () => {
       const entry = await mutate("take", { entryId: recovered.id }, 200);
       expect(entry).toEqual(recovered);
-      await mutate("entries", {
-        payload: {
-          kind: "result",
-          task: work.task,
-          issue: work.issue,
-          title: work.title,
-          body: "The draft includes setup and usage.",
-        },
-      }, 201);
+      const result = (issueNumber) => `{"payload":{
+        "kind":"result",
+        "task":${JSON.stringify(work.task)},
+        "issue":${issueNumber},
+        "title":${JSON.stringify(work.title)},
+        "body":"The draft includes setup and usage."
+      }}`;
 
+      await mutate("entries", result("42.0000000000000000001"), 201);
       await button("Tasks").click();
+      await refresh();
+      await expect(card("Taken", work.title)).toBeVisible();
+
+      await mutate("entries", result("42.0"), 201);
       await refresh();
       await expect(issue).toHaveValue(String(work.issue));
       await expect(card("Result posted", work.title)).toBeVisible();
       await expect(card("Result posted", sibling.title)).toHaveCount(0);
       await expect(card("Available", sibling.title)).toBeVisible();
       await expect(card("Taken", work.title)).toHaveCount(0);
+      await expect(issue.getByRole("option", { name: "42.0", exact: true })).toHaveCount(0);
+    });
+
+    await test.step("Connect without number support and report numeric data accurately", async () => {
+      await page.addInitScript(() => {
+        Object.defineProperty(JSON, "rawJSON", { value: undefined });
+      });
+      await page.reload();
+      await page.getByLabel("Access token", { exact: true }).fill(process.env.WHITEBOARD_E2E_BROWSER_TOKEN);
+      await button("Connect").click();
+      await expect(page.getByRole("heading", { name: "Whiteboard browser test", exact: true })).toBeVisible();
+      await expect(page.getByRole("alert")).toHaveText(/exact JSON numbers/);
     });
   } finally {
     await agent.dispose();
