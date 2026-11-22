@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -19,6 +20,7 @@ func TestExampleWorkerTakesMatchingWorkAndPostsResult(t *testing.T) {
 	f := newAPIFixture(t)
 	_, poster := f.token(t, "demo", "Maintainer", "post,read")
 	_, worker := f.token(t, "demo", "Uppercase worker", "take,post")
+	_, taker := f.token(t, "demo", "Take-only worker", "take")
 	unrelated := f.post(t, poster, "unrelated", `{"kind":"work","action":"review"}`)
 	work := f.post(t, poster, "example", `{"kind":"work","action":"uppercase","task":"uppercase-demo","text":"Hello, whiteboard!"}`)
 
@@ -29,13 +31,20 @@ func TestExampleWorkerTakesMatchingWorkAndPostsResult(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, node, "examples/uppercase-worker.mjs")
-	cmd.Env = append(cmd.Environ(),
-		"BOARD_URL="+f.server.URL+"/api/boards/demo",
-		"BOARD_TOKEN="+worker,
-		"NODE_EXTRA_CA_CERTS="+cert,
-	)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	run := func(token string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, node, "examples/uppercase-worker.mjs")
+		cmd.Env = append(cmd.Environ(),
+			"BOARD_URL="+f.server.URL+"/api/boards/demo",
+			"BOARD_TOKEN="+token,
+			"NODE_EXTRA_CA_CERTS="+cert,
+		)
+		return cmd.CombinedOutput()
+	}
+	if output, err := run(taker); err == nil || !strings.Contains(string(output), "needs both Take and Post") {
+		t.Fatalf("take-only worker should fail before claiming: %v\n%s", err, output)
+	}
+	assertEntries(t, f.browse(t, poster, `{"action":"uppercase"}`), work.ID)
+	if output, err := run(worker); err != nil {
 		t.Fatalf("run worker: %v\n%s", err, output)
 	}
 

@@ -15,7 +15,7 @@ Compose creates two WebDAV logins at startup.
 | Username | Password | Where to use it |
 | --- | --- | --- |
 | `worker` | `FILE_STORE_WORKER_PASSWORD` | Compose passes this login to the example worker. |
-| `reviewer` | `FILE_STORE_REVIEWER_PASSWORD` | Enter this login when the filestore prompts in your browser or terminal. |
+| `reviewer` | `FILE_STORE_REVIEWER_PASSWORD` | Enter this login when the read-only filestore prompts in your browser or terminal. |
 
 The token commands below issue credentials for the whiteboard API.
 
@@ -37,7 +37,7 @@ export BOARD_TOKEN='<file worker board token>'
 docker compose run --rm -e BOARD_TOKEN worker
 ```
 
-The worker processes one job and posts a report link in Activity. The filestore listens at `https://127.0.0.1:8443` and uses a local certificate. The curl command prompts for the password you set in `FILE_STORE_REVIEWER_PASSWORD`.
+The worker processes one job through its private write endpoint and posts a report link in Activity. The read-only filestore listens at `https://127.0.0.1:8443` and uses a local certificate. The curl command prompts for the password you set in `FILE_STORE_REVIEWER_PASSWORD`.
 
 ```sh
 file_ca="$(mktemp)"
@@ -49,7 +49,7 @@ Opening the report in a browser requires trusting the local filestore certificat
 
 ## Run locally
 
-You need Go 1.25 or later and PostgreSQL for the service, plus Node.js 20 or later to build the optional browser client. Use a browser with `JSON.rawJSON()` for exact JSON numbers, such as Chrome or Edge 114 or later, Firefox 135 or later, or Safari 18.4 or later.
+You need Go 1.27.4 or later and PostgreSQL for the service, plus Node.js 20 or later to build the optional browser client. Use a browser with `JSON.rawJSON()` for exact JSON numbers, such as Chrome or Edge 114 or later, Firefox 135 or later, or Safari 18.4 or later.
 
 ```sh
 createdb agentic_whiteboard
@@ -86,12 +86,15 @@ The service uses HTTPS when `WHITEBOARD_TLS_CERT` and `WHITEBOARD_TLS_KEY` point
 | Take | `POST /take` with a `pattern` or `entryId`, and optional `waitMs` | Take |
 | Browse | `POST /browse` with a `pattern` | Read |
 | History | `GET /history` | Read |
+| Inspect an entry | `GET /entries/{id}`, including entries already taken | Read |
 
 Patterns match the specified top-level fields by JSON value. An empty pattern matches all live entries. Read and Take pick the oldest match and return HTTP 204 when a pattern has no match after the requested wait. Post and Take require an idempotency key. Use a fresh key for each new operation and reuse it when retrying that operation.
 
+Browse and History return up to 50 records per page. If the response has a `nextCursor`, pass it as the `cursor` query parameter with the same Browse pattern or History selection to fetch the next page. Pass `summary=1` to list only the fields the browser uses for titles and task navigation. Open a record to fetch its full JSON.
+
 ## Run the tests
 
-Set `TEST_DATABASE_URL` to a dedicated PostgreSQL test database. The browser test provisions its own board and leaves its records in that database.
+Set `TEST_DATABASE_URL` to a dedicated PostgreSQL test database. Go skips the database tests when this variable is unset. The browser test provisions its own board and leaves its records in that database. GitHub Actions runs both suites against a fresh PostgreSQL database.
 
 Install rclone and OpenSSL to include the private-file browser test.
 

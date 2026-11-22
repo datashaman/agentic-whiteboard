@@ -25,7 +25,7 @@ services:
         COPY web/src/ ./src/
         RUN npm run build
 
-        FROM golang:1.25-alpine AS server
+        FROM golang:1.27.4-alpine AS server
         WORKDIR /src
         COPY go.mod go.sum ./
         RUN go mod download
@@ -49,7 +49,7 @@ services:
     command: ["whiteboard migrate && exec whiteboard serve"]
     ports:
       - "127.0.0.1:${WHITEBOARD_PORT:-8080}:8080"
-      - "127.0.0.1:${FILE_STORE_PORT:-8443}:${FILE_STORE_PORT:-8443}"
+      - "127.0.0.1:${FILE_STORE_PORT:-8443}:8443"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
       interval: 3s
@@ -57,7 +57,7 @@ services:
       retries: 20
 
   files:
-    build:
+    build: &filestore-build
       context: .
       dockerfile_inline: |
         FROM rclone/rclone:1.76.0
@@ -68,8 +68,6 @@ services:
       whiteboard:
         condition: service_healthy
     environment:
-      FILE_STORE_PORT: ${FILE_STORE_PORT:-8443}
-      FILE_STORE_WORKER_PASSWORD: ${FILE_STORE_WORKER_PASSWORD:?Set FILE_STORE_WORKER_PASSWORD}
       FILE_STORE_REVIEWER_PASSWORD: ${FILE_STORE_REVIEWER_PASSWORD:?Set FILE_STORE_REVIEWER_PASSWORD}
     volumes:
       - files:/files
@@ -85,18 +83,45 @@ services:
             -keyout /keys/filestore.key -out /certs/filestore.pem
         fi
         chmod 644 /certs/filestore.pem
-        printf '%s\n' "$$FILE_STORE_WORKER_PASSWORD" | htpasswd -iBc /run/filestore-users worker
-        printf '%s\n' "$$FILE_STORE_REVIEWER_PASSWORD" | htpasswd -iB /run/filestore-users reviewer
+        printf '%s\n' "$$FILE_STORE_REVIEWER_PASSWORD" | htpasswd -iBc /run/filestore-users reviewer
         if [ ! -e /files/transcript.txt ]; then
           printf 'Hello from the private filestore.\n' > /files/transcript.txt
         fi
         exec rclone serve webdav /files --config /dev/null \
-          --addr "0.0.0.0:$$FILE_STORE_PORT" --min-tls-version tls1.2 \
+          --addr 0.0.0.0:8443 --read-only --min-tls-version tls1.2 \
           --cert /certs/filestore.pem --key /keys/filestore.key --htpasswd /run/filestore-users
     healthcheck:
       test:
         - CMD-SHELL
-        - openssl s_client -brief -verify_return_error -verify_ip 127.0.0.1 -CAfile /certs/filestore.pem -connect "127.0.0.1:$$FILE_STORE_PORT" </dev/null >/dev/null 2>&1
+        - openssl s_client -brief -verify_return_error -verify_ip 127.0.0.1 -CAfile /certs/filestore.pem -connect 127.0.0.1:8443 </dev/null >/dev/null 2>&1
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  files-write:
+    build: *filestore-build
+    network_mode: service:whiteboard
+    depends_on:
+      files:
+        condition: service_healthy
+    environment:
+      FILE_STORE_WORKER_PASSWORD: ${FILE_STORE_WORKER_PASSWORD:?Set FILE_STORE_WORKER_PASSWORD}
+    volumes:
+      - files:/files
+      - file-key:/keys:ro
+      - file-certificate:/certs:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 077
+        printf '%s\n' "$$FILE_STORE_WORKER_PASSWORD" | htpasswd -iBc /run/filestore-users worker
+        exec rclone serve webdav /files --config /dev/null \
+          --addr 127.0.0.1:8444 --min-tls-version tls1.2 \
+          --cert /certs/filestore.pem --key /keys/filestore.key --htpasswd /run/filestore-users
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - openssl s_client -brief -verify_return_error -verify_ip 127.0.0.1 -CAfile /certs/filestore.pem -connect 127.0.0.1:8444 </dev/null >/dev/null 2>&1
       interval: 3s
       timeout: 3s
       retries: 20
@@ -107,11 +132,12 @@ services:
     user: node
     network_mode: service:whiteboard
     depends_on:
-      files:
+      files-write:
         condition: service_healthy
     environment:
       BOARD_URL: http://127.0.0.1:8080/api/boards/demo
       FILE_STORE_URL: https://127.0.0.1:${FILE_STORE_PORT:-8443}/
+      FILE_STORE_WRITE_URL: https://127.0.0.1:8444/
       FILE_STORE_USER: worker
       FILE_STORE_PASSWORD: ${FILE_STORE_WORKER_PASSWORD:?Set FILE_STORE_WORKER_PASSWORD}
       NODE_EXTRA_CA_CERTS: /certs/filestore.pem

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-export function connectBoard() {
+export async function connectBoard() {
   const token = process.env.BOARD_TOKEN?.trim();
   if (!process.env.BOARD_URL || !token) {
     throw new Error("Set BOARD_URL and BOARD_TOKEN before starting the worker.");
@@ -14,6 +14,20 @@ export function connectBoard() {
     throw new Error("Use the board API URL without credentials, a query, or a fragment.");
   }
   const board = url.href.replace(/\/+$/, "");
+  const authorization = "Bearer " + token;
+  const access = await fetch(board, {
+    headers: { Authorization: authorization },
+    redirect: "error",
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!access.ok) {
+    await access.body?.cancel();
+    throw new Error("Board details returned HTTP " + access.status + ".");
+  }
+  const { permissions } = await access.json();
+  if (!Array.isArray(permissions) || !permissions.includes("take") || !permissions.includes("post")) {
+    throw new Error("The worker needs both Take and Post permissions before it can claim work.");
+  }
 
   async function mutate(operation, input) {
     const requestID = randomUUID();
@@ -23,7 +37,7 @@ export function connectBoard() {
         method: "POST",
         body,
         headers: {
-          Authorization: "Bearer " + token,
+          Authorization: authorization,
           "Content-Type": "application/json",
           "Idempotency-Key": requestID,
         },
@@ -46,5 +60,5 @@ export function connectBoard() {
     return reply.entry;
   }
 
-  return mutate;
+  return { board, mutate };
 }

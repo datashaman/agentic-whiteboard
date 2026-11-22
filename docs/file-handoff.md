@@ -4,7 +4,7 @@ This example uses a private WebDAV directory to pass a text file through a white
 
 ## Start a filestore
 
-Use an HTTPS WebDAV store with Basic authentication, or run the sample locally with [rclone WebDAV](https://rclone.org/commands/rclone_serve_webdav/), OpenSSL, and `htpasswd`. Create separate filestore logins for the worker and reviewer.
+Use the [Compose stack](../README.md#run-with-docker-compose), or use an HTTPS WebDAV store with a writable worker login and a read-only reviewer login. To run [rclone WebDAV](https://rclone.org/commands/rclone_serve_webdav/) locally, use two listeners on the same directory with OpenSSL and `htpasswd`.
 
 ```sh
 export FILE_DEMO_DIR="$(mktemp -d)"
@@ -14,12 +14,16 @@ printf 'Hello from the private filestore.\n' > "$FILE_DEMO_DIR/files/transcript.
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
   -subj '/CN=127.0.0.1' -addext 'subjectAltName=IP:127.0.0.1' \
   -keyout "$FILE_DEMO_DIR/key.pem" -out "$FILE_DEMO_DIR/cert.pem"
-htpasswd -cB "$FILE_DEMO_DIR/users" worker
-htpasswd -B "$FILE_DEMO_DIR/users" reviewer
+htpasswd -cB "$FILE_DEMO_DIR/worker" worker
+htpasswd -cB "$FILE_DEMO_DIR/reviewer" reviewer
 rclone serve webdav "$FILE_DEMO_DIR/files" \
-  --addr 127.0.0.1:8443 --min-tls-version tls1.2 \
+  --addr 127.0.0.1:8443 --read-only --min-tls-version tls1.2 \
   --cert "$FILE_DEMO_DIR/cert.pem" --key "$FILE_DEMO_DIR/key.pem" \
-  --htpasswd "$FILE_DEMO_DIR/users"
+  --htpasswd "$FILE_DEMO_DIR/reviewer" &
+rclone serve webdav "$FILE_DEMO_DIR/files" \
+  --addr 127.0.0.1:8444 --min-tls-version tls1.2 \
+  --cert "$FILE_DEMO_DIR/cert.pem" --key "$FILE_DEMO_DIR/key.pem" \
+  --htpasswd "$FILE_DEMO_DIR/worker"
 ```
 
 The worker and curl commands below trust this local certificate explicitly. For opening the links in a browser, use a certificate trusted by that browser.
@@ -55,13 +59,14 @@ Set `FILE_DEMO_DIR` to the directory printed when starting the local filestore. 
 export BOARD_URL='http://127.0.0.1:8080/api/boards/demo'
 export BOARD_TOKEN='<file worker board token>'
 export FILE_STORE_URL='https://127.0.0.1:8443/'
+export FILE_STORE_WRITE_URL='https://127.0.0.1:8444/'
 export FILE_STORE_USER='worker'
 export FILE_STORE_PASSWORD='<worker filestore password>'
 export NODE_EXTRA_CA_CERTS="$FILE_DEMO_DIR/cert.pem"
 node examples/file-worker.mjs
 ```
 
-The worker takes one job, reads a UTF-8 file up to 1 MiB from its configured filestore origin, and uploads its uppercase result to a fresh URL. After upload, it posts a result entry that refers to the source entry and the report URL.
+The worker takes one job and validates the transcript URL against `FILE_STORE_URL`. It reads the transcript and uploads the uppercase report using the same paths at `FILE_STORE_WRITE_URL`, then posts a report URL under `FILE_STORE_URL` for reviewers. The example accepts UTF-8 text up to 1 MiB. For a store that handles permissions on a single origin, omit `FILE_STORE_WRITE_URL`.
 
 ## Check visibility
 

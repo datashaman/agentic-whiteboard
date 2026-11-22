@@ -173,6 +173,7 @@ code, pre { font-family: var(--mono); }
   background: var(--paper);
 }
 .list:empty { display: none; }
+.record-pages { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px; padding: 12px; }
 .record + .record { border-top: 1px solid var(--edge); }
 summary {
   display: grid;

@@ -22,6 +22,11 @@ export interface BoardEvent {
   entry: Entry;
 }
 
+export interface Overview {
+  issues: unknown[];
+  events: BoardEvent[];
+}
+
 export class APIError extends Error {
   constructor(readonly status: number, readonly code: string | undefined, message: string) {
     super(message);
@@ -76,12 +81,25 @@ export class BoardAPI {
     return this.request<Board>('');
   }
 
-  browse(pattern: string, signal: AbortSignal) {
-    return this.request<{ entries: Entry[] }>('/browse', '{"pattern":' + pattern + '}', signal);
+  browse(pattern: string, signal: AbortSignal, cursor?: string) {
+    const query = new URLSearchParams({ summary: '1' });
+    if (cursor) query.set('cursor', cursor);
+    return this.request<{ entries: Entry[]; nextCursor?: string }>('/browse?' + query, '{"pattern":' + pattern + '}', signal);
   }
 
-  history(signal?: AbortSignal) {
-    return this.request<{ events: BoardEvent[] }>('/history', undefined, signal);
+  history(signal: AbortSignal, cursor?: string, entryId?: string) {
+    const query = new URLSearchParams({ summary: '1' });
+    if (cursor) query.set('cursor', cursor);
+    if (entryId) query.set('entryId', entryId);
+    return this.request<{ events: BoardEvent[]; nextCursor?: string }>('/history?' + query, undefined, signal);
+  }
+
+  overview(tasks: boolean, signal: AbortSignal) {
+    return this.request<Overview>(tasks ? '/overview?tasks=1' : '/overview', undefined, signal);
+  }
+
+  entry(id: string, signal?: AbortSignal) {
+    return this.request<Entry>('/entries/' + encodeURIComponent(id), undefined, signal);
   }
 
   post(payload: string, action: string) {
@@ -94,16 +112,38 @@ export class BoardAPI {
 
   private async mutate(path: string, body: string, action: string) {
     // Reuse the request ID when retrying a mutation with an unknown outcome.
-    const operation = action + '\n' + body;
-    const key = this.requestKeys.get(operation) ?? crypto.randomUUID();
-    this.requestKeys.set(operation, key);
+    const input = new TextEncoder().encode(JSON.stringify([this.path, this.token, action, body]));
+    const digest = await crypto.subtle.digest('SHA-256', input);
+    const operation = 'whiteboard:request:' + Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+    const key = this.pendingKey(operation) ?? crypto.randomUUID();
+    this.saveKey(operation, key);
     try {
       const entry = await this.request<Entry>(path, body, undefined, key);
-      this.requestKeys.delete(operation);
+      this.saveKey(operation);
       return entry;
     } catch (error) {
-      if (error instanceof APIError && error.status < 500) this.requestKeys.delete(operation);
+      // Only a confirmed response from the board resolves an uncertain outcome.
+      if (error instanceof APIError && error.code && error.status < 500) this.saveKey(operation);
       throw error;
+    }
+  }
+
+  private pendingKey(operation: string) {
+    try {
+      return this.requestKeys.get(operation) ?? sessionStorage.getItem(operation);
+    } catch {
+      return this.requestKeys.get(operation);
+    }
+  }
+
+  private saveKey(operation: string, key?: string) {
+    if (key) this.requestKeys.set(operation, key);
+    else this.requestKeys.delete(operation);
+    try {
+      if (key) sessionStorage.setItem(operation, key);
+      else sessionStorage.removeItem(operation);
+    } catch {
+      // Storage can be disabled. In-page retries still reuse the key.
     }
   }
 

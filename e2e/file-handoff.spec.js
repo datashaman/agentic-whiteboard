@@ -37,26 +37,31 @@ test("a private file moves through work and Activity under separate permissions"
   const files = join(dir, "files");
   const key = join(dir, "key.pem");
   const cert = join(dir, "cert.pem");
-  const credentials = join(dir, "users");
   const workerPassword = randomUUID();
   const readerPassword = randomUUID();
-  let store, stopped, reader, observer;
+  const stores = [];
+  let reader, observer;
   try {
     await mkdir(files);
     await writeFile(join(files, "transcript.txt"), "Hello from the private filestore.\n");
     const user = (name, password) => name + ":{SHA}" + createHash("sha1").update(password).digest("base64");
-    await writeFile(credentials, [user("worker", workerPassword), user("reviewer", readerPassword)].join("\n") + "\n");
     await exec("openssl", [
       "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
       "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1",
       "-keyout", key, "-out", cert,
     ]);
-    store = spawn("rclone", [
-      "serve", "webdav", files, "--addr", "127.0.0.1:0", "--htpasswd", credentials,
-      "--cert", cert, "--key", key, "--config", join(dir, "rclone.conf"), "--log-level", "NOTICE",
-    ], { stdio: ["ignore", "ignore", "pipe"] });
-    stopped = once(store, "exit");
-    const storeURL = await storeAddress(store);
+    async function startStore(name, password, options = []) {
+      const credentials = join(dir, name);
+      await writeFile(credentials, user(name, password) + "\n");
+      const store = spawn("rclone", [
+        "serve", "webdav", files, "--addr", "127.0.0.1:0", "--htpasswd", credentials,
+        "--cert", cert, "--key", key, "--config", "/dev/null", "--log-level", "NOTICE", ...options,
+      ], { stdio: ["ignore", "ignore", "pipe"] });
+      stores.push({ store, stopped: once(store, "exit") });
+      return storeAddress(store);
+    }
+    const storeURL = await startStore("reviewer", readerPassword, ["--read-only"]);
+    const writeURL = await startStore("worker", workerPassword);
     const transcript = storeURL + "transcript.txt";
     const board = "/boards/" + process.env.WHITEBOARD_E2E_BOARD;
     const apiURL = process.env.WHITEBOARD_E2E_URL + "/api" + board;
@@ -78,6 +83,7 @@ test("a private file moves through work and Activity under separate permissions"
         BOARD_URL: apiURL,
         BOARD_TOKEN: process.env.WHITEBOARD_E2E_AGENT_TOKEN,
         FILE_STORE_URL: storeURL,
+        FILE_STORE_WRITE_URL: writeURL,
         FILE_STORE_USER: "worker",
         FILE_STORE_PASSWORD: workerPassword,
         NODE_EXTRA_CA_CERTS: cert,
@@ -114,11 +120,19 @@ test("a private file moves through work and Activity under separate permissions"
     await expect(file.locator("body")).toHaveText("HELLO FROM THE PRIVATE FILESTORE.");
     const response = await observer.request.get(denied.uri);
     expect(response.status()).toBe(401);
+    const write = await reader.request.put(allowed.uri, {
+      headers: { Authorization: "Basic " + Buffer.from("reviewer:" + readerPassword).toString("base64") },
+      data: "The reviewer should not be able to change this report.",
+    });
+    expect(write.ok()).toBe(false);
+    expect(write.status()).not.toBe(401);
+    await file.reload();
+    await expect(file.locator("body")).toHaveText("HELLO FROM THE PRIVATE FILESTORE.");
   } finally {
     await Promise.allSettled([reader?.close(), observer?.close()]);
-    store?.kill();
+    for (const { store } of stores) store.kill();
     try {
-      await stopped;
+      await Promise.all(stores.map(({ stopped }) => stopped));
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
