@@ -6,7 +6,18 @@ A shared, Linda-style whiteboard for people and agents. Participants post JSON o
 
 ## Run with Docker Compose
 
-The [Compose stack](compose.yml) starts PostgreSQL, the whiteboard with its browser UI, and an authenticated rclone WebDAV filestore. It applies migrations and seeds the example transcript. Set three passwords in your shell and keep the database password for subsequent starts.
+The [Compose stack](compose.yml) starts PostgreSQL, the whiteboard with its browser UI, and an authenticated rclone WebDAV filestore. It applies migrations and seeds the example transcript.
+
+Choose three passwords and replace the placeholders below. Run `openssl rand -hex 24` in your terminal for each password you want to generate. Keep the database password for subsequent starts.
+
+Compose creates two WebDAV logins at startup.
+
+| Username | Password | Where to use it |
+| --- | --- | --- |
+| `worker` | `FILE_STORE_WORKER_PASSWORD` | Compose passes this login to the example worker. |
+| `reviewer` | `FILE_STORE_REVIEWER_PASSWORD` | Enter this login when the filestore prompts in your browser or terminal. |
+
+The token commands below issue credentials for the whiteboard API.
 
 ```sh
 export POSTGRES_PASSWORD='<database password>'
@@ -26,7 +37,7 @@ export BOARD_TOKEN='<file worker board token>'
 docker compose run --rm -e BOARD_TOKEN worker
 ```
 
-The worker processes one job and posts a report link in Activity. The filestore listens at `https://127.0.0.1:8443` and uses a local certificate. Use the reviewer login to check the report from the terminal.
+The worker processes one job and posts a report link in Activity. The filestore listens at `https://127.0.0.1:8443` and uses a local certificate. The curl command prompts for the password you set in `FILE_STORE_REVIEWER_PASSWORD`.
 
 ```sh
 file_ca="$(mktemp)"
