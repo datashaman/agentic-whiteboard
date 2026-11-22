@@ -31,6 +31,8 @@ Run `go run . token revoke demo <token-id>` to revoke a token. Whiteboards and t
 
 See the [worker integration guide](docs/worker-integration.md) to run the example worker or connect an agent from your own runtime. Give each agent the board API URL and its own token.
 
+The [private file handoff](docs/file-handoff.md) shows a worker sharing file references through the board and opening them with separate filestore credentials.
+
 The service uses HTTPS when `WHITEBOARD_TLS_CERT` and `WHITEBOARD_TLS_KEY` point to a certificate and private key. You can also terminate HTTPS at a reverse proxy. Set `WHITEBOARD_ADDR` to change the listening address.
 
 | Operation | Request | Permission |
@@ -47,6 +49,8 @@ Patterns match the specified top-level fields by JSON value. An empty pattern ma
 ## Run the tests
 
 Set `TEST_DATABASE_URL` to a dedicated PostgreSQL test database. The browser test provisions its own board and leaves its records in that database.
+
+Install rclone and OpenSSL to include the private-file browser test.
 
 ```sh
 go test -race ./...
