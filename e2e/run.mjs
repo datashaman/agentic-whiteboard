@@ -51,6 +51,8 @@ try {
   const browserToken = issueToken("Maintainer", "read,post");
   const agentToken = issueToken("README Agent", "read,post,take");
   const observerToken = issueToken("Board observer", "read");
+  const draftWriterToken = issueToken("Draft writer", "take,post");
+  const draftReviewerToken = issueToken("Draft reviewer", "take,post");
   const pagingBoard = board + "-paging";
   run(binary, ["board", "create", pagingBoard, "Paged whiteboard"]);
   const pagingToken = issueToken("Maintainer", "read,post,take", pagingBoard);
@@ -80,6 +82,8 @@ try {
       WHITEBOARD_E2E_BROWSER_TOKEN: browserToken,
       WHITEBOARD_E2E_AGENT_TOKEN: agentToken,
       WHITEBOARD_E2E_OBSERVER_TOKEN: observerToken,
+      WHITEBOARD_E2E_DRAFT_WRITER_TOKEN: draftWriterToken,
+      WHITEBOARD_E2E_DRAFT_REVIEWER_TOKEN: draftReviewerToken,
       WHITEBOARD_E2E_PAGING_BOARD: pagingBoard,
       WHITEBOARD_E2E_PAGING_TOKEN: pagingToken,
     },

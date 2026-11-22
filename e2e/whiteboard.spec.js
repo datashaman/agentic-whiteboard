@@ -245,6 +245,10 @@ test("paged records load JSON on demand and a lost post reply survives reload", 
   await expect(record.getByLabel("Entry JSON")).toContainText("Preserve full JSON");
   await record.getByRole("button", { name: "Repost" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Reposted entry" })).toBeVisible();
+  await activity.getByRole("button", { name: "View original take (entry " + original.id + ")" }).click();
+  await expect(record.getByLabel("Entry JSON")).toContainText("Preserve full JSON");
+  await record.getByRole("button", { name: /View latest repost/ }).click();
+  await expect(activity.getByRole("button", { name: "View original take (entry " + original.id + ")" })).toBeVisible();
 
   const route = "**" + api + "/entries";
   await page.route(route, async request => {

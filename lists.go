@@ -103,7 +103,7 @@ func (a *api) overview(w http.ResponseWriter, r *http.Request, access boardAcces
 			'kind', match_data -> '"kind"', 'task', match_data -> '"task"',
 			'issue', CASE WHEN jsonb_typeof(match_data -> '"issue"') = 'string' THEN match_data -> '"issue"' END))`
 	}
-	rows, err = a.db.Query(ctx, eventQuery(fields)+`
+	rows, err = a.db.Query(ctx, eventQuery(fields, false)+`
 		WHERE ev.board = $1 AND left(match_data ->> '"task"', 1) = '"'
 			AND (
 				match_data ->> '"kind"' = '"work"' AND ($2 OR ev.operation = 'post')

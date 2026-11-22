@@ -34,6 +34,7 @@ func newHandler(db *pgxpool.Pool, webDir string) http.Handler {
 	mux.HandleFunc("GET /api/boards/{slug}/{$}", a.board)
 	mux.HandleFunc("POST /api/boards/{slug}/entries", a.withPermission("post", a.post))
 	mux.HandleFunc("GET /api/boards/{slug}/entries/{id}", a.withPermission("read", a.entryDetails))
+	mux.HandleFunc("POST /api/boards/{slug}/entries/{id}/repost", a.withPermission("read", a.repost))
 	mux.HandleFunc("POST /api/boards/{slug}/browse", a.withPermission("read", a.browse))
 	mux.HandleFunc("POST /api/boards/{slug}/read", a.withPermission("read", a.read))
 	mux.HandleFunc("POST /api/boards/{slug}/take", a.withPermission("take", a.take))

@@ -66,13 +66,15 @@ WHITEBOARD_WEB_DIR=web/dist go run . serve
 
 Set `DATABASE_URL` to the connection URL for your PostgreSQL instance. The token command prints the access token and its ID. Save the token to connect and keep the ID for revocation.
 
-Open `http://127.0.0.1:8080/boards/demo` and paste the access token. Tasks groups work by its workflow-defined task ID. Live entries lets you post and inspect JSON. Activity shows who posted or took each entry and lets you recover taken work with Read and Post access.
+Open `http://127.0.0.1:8080/boards/demo` and paste the access token. Tasks groups work by its workflow-defined task ID. Open a Taken card to see who took the work and when. With Read and Post access, Repost makes a fresh copy and Activity links it to the original take.
 
 Run `go run . token revoke demo <token-id>` to revoke a token. Whiteboards and their permissions are independent, so issue tokens for each board an agent needs.
 
 ## Connect an agent
 
 See the [worker integration guide](docs/worker-integration.md) to run the example worker or connect an agent from your own runtime. Give each agent the board API URL and its own token.
+
+The [draft-and-review demo](docs/worker-integration.md#run-a-draft-and-review-handoff) shows two separate workers handing off work and how to recover when one stops after Take.
 
 The [private file handoff](docs/file-handoff.md) shows a worker sharing file references through the board and opening them with separate filestore credentials.
 
@@ -87,10 +89,13 @@ The service uses HTTPS when `WHITEBOARD_TLS_CERT` and `WHITEBOARD_TLS_KEY` point
 | Browse | `POST /browse` with a `pattern` | Read |
 | History | `GET /history` | Read |
 | Inspect an entry | `GET /entries/{id}`, including entries already taken | Read |
+| Repost a taken entry | `POST /entries/{id}/repost` with `{}` and an `Idempotency-Key` | Read and Post |
 
 Patterns match the specified top-level fields by JSON value. An empty pattern matches all live entries. Read and Take pick the oldest match and return HTTP 204 when a pattern has no match after the requested wait. Post and Take require an idempotency key. Use a fresh key for each new operation and reuse it when retrying that operation.
 
 Browse and History return up to 50 records per page. If the response has a `nextCursor`, pass it as the `cursor` query parameter with the same Browse pattern or History selection to fetch the next page. Pass `summary=1` to list only the fields the browser uses for titles and task navigation. Open a record to fetch its full JSON.
+
+Repost copies the stored JSON exactly and returns the new entry with HTTP 201. History reports `repostedFrom` on the replacement's Post and `latestRepost` on the original Take. Both fields are entry IDs.
 
 ## Run the tests
 

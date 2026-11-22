@@ -506,6 +506,8 @@ type observedEvent struct {
 	ID, Operation, Actor string
 	At                   time.Time
 	Entry                observedEntry
+	RepostedFrom         string
+	LatestRepost         string
 }
 
 func (f *apiFixture) history(t *testing.T, token string) []observedEvent {
@@ -662,7 +664,9 @@ func TestPermissionsAndRecoveryAreBoardScoped(t *testing.T) {
 	} {
 		f.call(t, tc.method, "demo/"+tc.route, tc.token, "forbidden", tc.body, 403, nil)
 	}
-	original := f.post(t, writer, "request", `{"kind":"work","issue":1,"note":null}`)
+	original := f.post(t, writer, "request", `{"kind":"work","issue":1,"note":null,"exact":9007199254740993}`)
+	repostRoute := "entries/" + original.ID + "/repost"
+	f.call(t, "POST", "demo/"+repostRoute, maintainer, "request", `{}`, 404, nil)
 	assertEntries(t, f.browse(t, reader, `{}`), original.ID)
 	var read observedEntry
 	f.call(t, "POST", "demo/read", reader, "", `{"pattern":{"note":null}}`, 200, &read)
@@ -684,7 +688,16 @@ func TestPermissionsAndRecoveryAreBoardScoped(t *testing.T) {
 	}
 	assertEvent(t, events[0], "take", "Worker", original)
 	assertEvent(t, events[1], "post", "Writer", original)
-	recovered := f.post(t, maintainer, "request", string(events[0].Entry.Payload))
+	f.call(t, "POST", "demo/"+repostRoute, reader, "request", `{}`, 403, nil)
+	f.call(t, "POST", "demo/"+repostRoute, writer, "request", `{}`, 403, nil)
+	f.call(t, "POST", "other/"+repostRoute, other, "foreign-repost", `{}`, 404, nil)
+	var recovered, replayed observedEntry
+	f.call(t, "POST", "demo/"+repostRoute, maintainer, "request", `{}`, 201, &recovered)
+	f.call(t, "POST", "demo/"+repostRoute, maintainer, "request", `{}`, 201, &replayed)
+	if replayed.ID != recovered.ID {
+		t.Fatalf("repost replay created %s, want %s", replayed.ID, recovered.ID)
+	}
+	f.call(t, "POST", "demo/entries", maintainer, "request", `{"payload":{}}`, 409, nil)
 	if recovered.ID == original.ID || string(recovered.Payload) != string(original.Payload) {
 		t.Fatalf("recovery returned %+v for original %+v", recovered, original)
 	}
@@ -695,6 +708,9 @@ func TestPermissionsAndRecoveryAreBoardScoped(t *testing.T) {
 	}
 	assertEvent(t, events[0], "post", "Maintainer", recovered)
 	assertEvent(t, events[1], "take", "Worker", original)
+	if events[0].RepostedFrom != original.ID || events[1].LatestRepost != recovered.ID {
+		t.Fatalf("missing recovery links: %+v", events)
+	}
 }
 
 func TestConcurrentRetriesShareOneMutation(t *testing.T) {

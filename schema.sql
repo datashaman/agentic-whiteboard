@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS entries (
 
 CREATE INDEX IF NOT EXISTS entries_live_order ON entries (board, id) WHERE live;
 
+ALTER TABLE entries ADD COLUMN IF NOT EXISTS reposted_from bigint REFERENCES entries(id);
+CREATE INDEX IF NOT EXISTS entries_reposts ON entries (board, reposted_from, id DESC) WHERE reposted_from IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS events (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     board text NOT NULL,

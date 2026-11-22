@@ -9,15 +9,26 @@ import (
 )
 
 type event struct {
-	ID        string    `json:"id"`
-	Operation string    `json:"operation"`
-	Actor     string    `json:"actor"`
-	At        time.Time `json:"at"`
-	Entry     entry     `json:"entry"`
+	ID           string    `json:"id"`
+	Operation    string    `json:"operation"`
+	Actor        string    `json:"actor"`
+	At           time.Time `json:"at"`
+	Entry        entry     `json:"entry"`
+	RepostedFrom *string   `json:"repostedFrom,omitempty"`
+	LatestRepost *string   `json:"latestRepost,omitempty"`
 }
 
-func eventQuery(fields string) string {
-	return "SELECT ev.id::text, ev.operation, t.actor, ev.at, en.id::text, " + fields + `, en.posted_at
+func eventQuery(fields string, includeReposts bool) string {
+	reposts := ", NULL::text, NULL::text"
+	if includeReposts {
+		reposts = `, CASE WHEN ev.operation = 'post' THEN en.reposted_from::text END,
+			CASE WHEN ev.operation = 'take' THEN (
+				SELECT child.id::text FROM entries child
+				WHERE child.board = en.board AND child.reposted_from = en.id
+				ORDER BY child.id DESC LIMIT 1
+			) END`
+	}
+	return "SELECT ev.id::text, ev.operation, t.actor, ev.at, en.id::text, " + fields + ", en.posted_at" + reposts + `
 		FROM events ev
 		JOIN tokens t ON t.board = ev.board AND t.id = ev.token_id
 		JOIN entries en ON en.board = ev.board AND en.id = ev.entry_id
@@ -28,7 +39,7 @@ func collectEvents(rows pgx.Rows, summary bool) ([]event, error) {
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (event, error) {
 		var result event
 		err := row.Scan(&result.ID, &result.Operation, &result.Actor, &result.At,
-			&result.Entry.ID, &result.Entry.Payload, &result.Entry.PostedAt)
+			&result.Entry.ID, &result.Entry.Payload, &result.Entry.PostedAt, &result.RepostedFrom, &result.LatestRepost)
 		result.At = result.At.UTC()
 		result.Entry.PostedAt = result.Entry.PostedAt.UTC()
 		if err == nil && summary {
@@ -53,7 +64,7 @@ func (a *api) history(w http.ResponseWriter, r *http.Request, access boardAccess
 		}
 	}
 	fields, summary := listFields(r)
-	rows, err := a.db.Query(r.Context(), eventQuery(fields)+`
+	rows, err := a.db.Query(r.Context(), eventQuery(fields, true)+`
 		WHERE ev.board = $1 AND ($2 = 0 OR (ev.at, ev.id) < (
 			SELECT at, id FROM events WHERE board = $1 AND id = $2
 		)) AND ($3 = 0 OR ev.entry_id = $3)

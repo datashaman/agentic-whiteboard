@@ -17,6 +17,7 @@ interface TaskCard {
   entry: Entry;
   lane: Lane;
   attribution: string;
+  takenAt?: string;
 }
 
 interface PositionedEvent {
@@ -168,7 +169,7 @@ export function taskCards(events: BoardEvent[], taskIssues: TaskIssues): TaskCar
     } else if (posted && result && result.index < posted.index) {
       cards.push({ ref, entry, lane: 'result', attribution: 'Result by ' + result.event.actor });
     } else if (taken) {
-      cards.push({ ref, entry, lane: 'taken', attribution: 'Taken by ' + taken.actor });
+      cards.push({ ref, entry, lane: 'taken', attribution: 'Taken by ' + taken.actor, takenAt: taken.at });
     }
   }
   return cards;
