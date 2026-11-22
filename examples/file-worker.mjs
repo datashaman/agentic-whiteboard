@@ -13,19 +13,21 @@ function privateURL(value) {
 
 let workID;
 try {
-  const mutate = connectBoard();
   const { FILE_STORE_URL, FILE_STORE_USER, FILE_STORE_PASSWORD } = process.env;
   if (!FILE_STORE_URL || !FILE_STORE_USER || FILE_STORE_USER.includes(":") || !FILE_STORE_PASSWORD) {
     throw new Error("Set FILE_STORE_URL, FILE_STORE_USER, and FILE_STORE_PASSWORD.");
   }
   const store = privateURL(FILE_STORE_URL);
   if (!store.pathname.endsWith("/")) store.pathname += "/";
+  const writeStore = process.env.FILE_STORE_WRITE_URL ? privateURL(process.env.FILE_STORE_WRITE_URL) : store;
   const authorization = "Basic " + Buffer.from(FILE_STORE_USER + ":" + FILE_STORE_PASSWORD).toString("base64");
 
   async function fileRequest(url, method, body) {
     const headers = { Authorization: authorization };
     if (body !== undefined) headers["Content-Type"] = "text/plain; charset=utf-8";
-    const response = await fetch(url, {
+    const endpoint = new URL(writeStore);
+    endpoint.pathname = url.pathname;
+    const response = await fetch(endpoint, {
       method, body, headers, redirect: "error", signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) {
@@ -35,9 +37,11 @@ try {
     return response;
   }
 
-  const work = await mutate("take", { pattern: { kind: "work", action: "uppercase-file" }, waitMs: 10_000 });
+  const { board, mutate } = await connectBoard();
+  const action = "uppercase-file";
+  const work = await mutate("take", { pattern: { kind: "work", action }, waitMs: 10_000 });
   if (work === null) {
-    console.log("No matching work.");
+    console.log("No work with action " + JSON.stringify(action) + " on " + board + ".");
   } else {
     workID = work.id;
     const { task, document } = work.payload;

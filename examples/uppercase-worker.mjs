@@ -1,13 +1,14 @@
 import { connectBoard } from "./board-client.mjs";
 
 async function run() {
-  const mutate = connectBoard();
+  const { board, mutate } = await connectBoard();
+  const action = "uppercase";
   const work = await mutate("take", {
-    pattern: { kind: "work", action: "uppercase" },
+    pattern: { kind: "work", action },
     waitMs: 10_000,
   });
   if (work === null) {
-    console.log("No matching work.");
+    console.log("No work with action " + JSON.stringify(action) + " on " + board + ".");
     return;
   }
 

@@ -33,10 +33,12 @@ func newHandler(db *pgxpool.Pool, webDir string) http.Handler {
 	mux.HandleFunc("GET /api/boards/{slug}", a.board)
 	mux.HandleFunc("GET /api/boards/{slug}/{$}", a.board)
 	mux.HandleFunc("POST /api/boards/{slug}/entries", a.withPermission("post", a.post))
+	mux.HandleFunc("GET /api/boards/{slug}/entries/{id}", a.withPermission("read", a.entryDetails))
 	mux.HandleFunc("POST /api/boards/{slug}/browse", a.withPermission("read", a.browse))
 	mux.HandleFunc("POST /api/boards/{slug}/read", a.withPermission("read", a.read))
 	mux.HandleFunc("POST /api/boards/{slug}/take", a.withPermission("take", a.take))
 	mux.HandleFunc("GET /api/boards/{slug}/history", a.withPermission("read", a.history))
+	mux.HandleFunc("GET /api/boards/{slug}/overview", a.withPermission("read", a.overview))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "API route not found")
 	})
@@ -109,6 +111,7 @@ func (a *api) authenticate(ctx context.Context, slug, authorization string) (boa
 
 func writeFailure(w http.ResponseWriter, r *http.Request, err error) {
 	if r.Context().Err() != nil {
+		writeError(w, http.StatusServiceUnavailable, "request_interrupted", "request interrupted; retry the request")
 		return
 	}
 	var failure *apiError

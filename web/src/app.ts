@@ -17,9 +17,13 @@ interface Session {
   task?: TaskRef;
   pattern: string;
   entries: Entry[];
-  matching: Entry[];
   events: BoardEvent[];
+  taskEvents: BoardEvent[];
+  issues: unknown[];
   taskIssues: TaskIssues;
+  pages: string[];
+  nextCursor?: string;
+  disclosure?: AbortController;
   refresh?: AbortController;
   loaded: boolean;
   mutating: boolean;
@@ -95,6 +99,7 @@ function announce(success = '', failure = '') {
 
 function disconnect(reason = '') {
   active?.refresh?.abort();
+  active?.disclosure?.abort();
   active = undefined;
   workspace.hidden = true;
   sessionBar.hidden = true;
@@ -126,8 +131,7 @@ function report(session: Session, error: unknown, target = boardError) {
 
 function refreshIssueOptions(session: Session) {
   const values = new Set<string>(session.issue ? [session.issue] : []);
-  for (const { payload } of session.entries) values.add(issueOf(payload));
-  for (const { entry } of session.events) values.add(issueOf(entry.payload));
+  for (const value of session.issues) values.add(issueOf({ issue: value }));
   values.delete('');
   issue.replaceChildren(
     new Option('All issues', ''),
@@ -137,8 +141,12 @@ function refreshIssueOptions(session: Session) {
   issue.value = session.issue;
 }
 
+function matchesIssue(payload: Payload, issue: string, taskIssues: TaskIssues) {
+  return issue === '' || relatedIssue(payload, taskIssues) === issue;
+}
+
 function inIssue(session: Session, entry: Entry) {
-  return session.issue === '' || relatedIssue(entry.payload, session.taskIssues) === session.issue;
+  return matchesIssue(entry.payload, session.issue, session.taskIssues);
 }
 
 function titleOf(entry: Entry): string {
@@ -154,7 +162,7 @@ function tag(text: string, isIssue = false) {
 
 function renderTasks(session: Session) {
   const visible = session.view === 'tasks';
-  const cards = visible ? taskCards(session.entries, session.events, session.taskIssues) : [];
+  const cards = visible && session.loaded ? taskCards(session.taskEvents, session.taskIssues) : [];
   for (const lane of lanes) {
     const container = lane.querySelector('.cards')!;
     const count = lane.querySelector('.count')!;
@@ -171,8 +179,7 @@ function renderTasks(session: Session) {
       const control = button('', () => {
         session.task = card.ref;
         session.pattern = pattern.value = '{}';
-        session.matching = session.entries;
-        showView(session, 'entries', true);
+        void showView(session, 'entries', true);
         viewButtons.find(item => item.dataset.view === 'entries')?.focus();
       }, 'task-card');
       const title = titleOf(card.entry);
@@ -222,7 +229,8 @@ function renderPayload(raw: HTMLElement, links: HTMLElement, payload: Payload) {
   links.hidden = urls.size === 0;
 }
 
-function record(entry: Entry, openId: string | undefined, action?: HTMLButtonElement, event?: BoardEvent) {
+function record(session: Session, entry: Entry, openId: string | undefined,
+  action?: (full: Entry) => HTMLButtonElement, event?: BoardEvent) {
   const details = node('details', 'record');
   details.dataset.id = event?.id ?? entry.id;
   details.name = event ? 'activity-record' : 'live-record';
@@ -244,19 +252,44 @@ function record(entry: Entry, openId: string | undefined, action?: HTMLButtonEle
   details.append(summary);
 
   const body = node('div', 'record-body');
+  let request: AbortController | undefined;
+  let full: Entry | undefined;
+  function showPayload(payload: Entry) {
+    const raw = node('pre');
+    raw.setAttribute('aria-label', 'Entry JSON');
+    const links = node('ul', 'entry-links');
+    renderPayload(raw, links, payload.payload);
+    body.replaceChildren(raw, links);
+    if (action) body.append(action(payload));
+  }
   function syncDisclosure() {
     if (!details.open) {
+      request?.abort();
+      request = undefined;
       body.remove();
       return;
     }
     if (body.parentElement) return;
-    const raw = node('pre');
-    raw.setAttribute('aria-label', 'Entry JSON');
-    const links = node('ul', 'entry-links');
-    renderPayload(raw, links, entry.payload);
-    body.replaceChildren(raw, links);
-    if (action) body.append(action);
     details.append(body);
+    if (full) {
+      showPayload(full);
+      return;
+    }
+    session.disclosure?.abort();
+    const load = new AbortController();
+    request = session.disclosure = load;
+    const loading = node('p', '', 'Loading entry…');
+    loading.setAttribute('role', 'status');
+    body.replaceChildren(loading);
+    void session.api.entry(entry.id, load.signal).then(payload => {
+      if (load.signal.aborted || !details.open) return;
+      full = payload;
+      showPayload(payload);
+    }).catch(error => {
+      if (load.signal.aborted) return;
+      if (error instanceof APIError && error.status === 401) report(session, error);
+      else loading.textContent = errorMessage(error);
+    });
   }
   details.ontoggle = syncDisclosure;
   details.open = details.dataset.id === openId;
@@ -268,6 +301,7 @@ function renderRecords(session: Session, takenId?: string) {
   const list = session.view === 'activity' ? eventList : entryList;
   const restoreFocus = list.contains(document.activeElement);
   const openId = list.querySelector<HTMLElement>('details[open]')?.dataset.id;
+  session.disclosure?.abort();
   entryList.replaceChildren();
   eventList.replaceChildren();
   if (session.view === 'tasks' || !has(session, 'read')) return;
@@ -278,28 +312,40 @@ function renderRecords(session: Session, takenId?: string) {
   }
 
   if (session.view === 'activity') {
-    const events = session.events.filter(event => inIssue(session, event.entry));
+    const events = session.events.filter(event => inIssue(session, event.entry) ||
+      (event.operation === 'take' && event.entry.id === takenId));
     const selected = takenId ? events.find(event => event.operation === 'take' && event.entry.id === takenId)?.id : openId;
     for (const event of events) {
       const action = event.operation === 'take' && has(session, 'post')
-        ? button('Repost', control => void repost(session, event, control))
+        ? (full: Entry) => button('Repost', control => void repost(session, { ...event, entry: full }, control))
         : undefined;
-      list.append(record(event.entry, selected, action, event));
+      list.append(record(session, event.entry, selected, action, event));
     }
-    if (!events.length) list.append(node('p', 'empty', 'No activity for this selection.'));
+    if (!events.length) list.append(node('p', 'empty', 'No activity for this selection on this page.'));
   } else {
-    const entries = session.matching.filter(entry =>
+    const entries = session.entries.filter(entry =>
       inIssue(session, entry) && (!session.task || matchesTask(entry.payload, session.task, session.taskIssues)),
     );
     for (const entry of entries) {
       const action = has(session, 'take')
-        ? button('Take', control => void take(session, entry.id, control))
+        ? () => button('Take', control => void take(session, entry.id, control))
         : undefined;
-      list.append(record(entry, openId, action));
+      list.append(record(session, entry, openId, action));
     }
-    if (!entries.length) list.append(node('p', 'empty', 'No live entries match this selection.'));
+    if (!entries.length) list.append(node('p', 'empty', 'No live entries match this selection on this page.'));
   }
 
+  if (session.pages.length || session.nextCursor) {
+    const pages = node('div', 'record-pages');
+    const previous = button('Previous page', () => void refresh(session, undefined, session.pages.slice(0, -1)));
+    previous.disabled = Boolean(session.refresh) || !session.pages.length;
+    const next = button('Next page', () => {
+      if (session.nextCursor) void refresh(session, undefined, [...session.pages, session.nextCursor]);
+    });
+    next.disabled = Boolean(session.refresh) || !session.nextCursor;
+    pages.append(previous, node('span', '', 'Page ' + (session.pages.length + 1)), next);
+    list.append(pages);
+  }
   if (restoreFocus || takenId) list.querySelector<HTMLElement>('details[open] > summary')?.focus();
 }
 
@@ -327,32 +373,54 @@ function showView(session: Session, view: View, keepTask = false) {
   session.view = view;
   if (!keepTask) session.task = undefined;
   announce();
+  session.loaded = false;
+  const pending = refresh(session);
   render(session);
+  return pending;
 }
 
-async function refresh(session: Session, takenId?: string) {
+async function refresh(session: Session, takenId?: string, pages: string[] = []) {
   session.refresh?.abort();
   const request = new AbortController();
   session.refresh = request;
   refreshButton.disabled = true;
   browseButton.disabled = true;
   workspace.setAttribute('aria-busy', 'true');
+  const view = session.view;
+  const cursor = pages.at(-1);
+  const selectedIssue = session.issue;
+  const selectedTask = session.task;
   const requestedPattern = session.pattern;
   try {
     if (has(session, 'read')) {
-      const all = session.api.browse('{}', request.signal);
-      const [live, history, matching] = await Promise.all([
-        all,
-        session.api.history(request.signal),
-        requestedPattern === '{}' ? all : session.api.browse(requestedPattern, request.signal),
+      let [overview, live, history, focused] = await Promise.all([
+        session.api.overview(view === 'tasks', request.signal),
+        view === 'entries' ? session.api.browse(requestedPattern, request.signal, cursor) : undefined,
+        view === 'activity' ? session.api.history(request.signal, cursor) : undefined,
+        takenId ? session.api.history(request.signal, undefined, takenId) : undefined,
       ]);
+      const taskIssues = collectTaskIssues(overview.events);
+      // A scoped view can skip pages of unrelated summaries.
+      if (selectedIssue || selectedTask) {
+        const accepts = ({ payload }: Entry) => matchesIssue(payload, selectedIssue, taskIssues)
+          && (!selectedTask || matchesTask(payload, selectedTask, taskIssues));
+        while (live?.nextCursor && !live.entries.some(accepts)) {
+          live = await session.api.browse(requestedPattern, request.signal, live.nextCursor);
+        }
+        while (!takenId && history?.nextCursor && !history.events.some(event => accepts(event.entry))) {
+          history = await session.api.history(request.signal, history.nextCursor);
+        }
+      }
       if (active !== session || request.signal.aborted) return;
-      session.events = history.events ?? [];
-      const taken = new Set(session.events.filter(event => event.operation === 'take').map(event => event.entry.id));
-      // Browse and History can straddle a take. A recorded take is authoritative.
-      session.entries = (live.entries ?? []).filter(entry => !taken.has(entry.id));
-      session.taskIssues = collectTaskIssues(session.entries, session.events);
-      session.matching = session.pattern === '{}' ? session.entries : (matching.entries ?? []).filter(entry => !taken.has(entry.id));
+      session.events = history?.events ?? [];
+      const take = focused?.events.find(event => event.operation === 'take');
+      if (take && !session.events.some(event => event.id === take.id)) session.events.unshift(take);
+      session.entries = live?.entries ?? [];
+      session.taskEvents = overview.events;
+      session.issues = overview.issues;
+      session.taskIssues = taskIssues;
+      session.pages = pages;
+      session.nextCursor = live?.nextCursor ?? history?.nextCursor;
       refreshIssueOptions(session);
     } else {
       await session.api.board();
@@ -393,7 +461,8 @@ async function take(session: Session, entryId: string, control: HTMLButtonElemen
     } catch (error) {
       if (active !== session) return;
       if (error instanceof APIError && error.code === 'already_taken' && has(session, 'read')) {
-        showView(session, 'activity');
+        session.view = 'activity';
+        session.task = undefined;
         await refresh(session, entryId);
         if (active !== session) return;
         const event = session.events.find(item => item.operation === 'take' && item.entry.id === entryId);
@@ -448,7 +517,8 @@ loginForm.onsubmit = async event => {
     const board = await api.board();
     const session: Session = {
       api, board, view: board.permissions.includes('read') ? 'tasks' : 'entries',
-      issue: '', pattern: '{}', entries: [], matching: [], events: [], taskIssues: new Map(),
+      issue: '', pattern: '{}', entries: [], events: [], taskEvents: [], issues: [],
+      taskIssues: collectTaskIssues([]), pages: [],
       loaded: false, mutating: false,
     };
     history.replaceState(null, '', '/boards/' + encodeURIComponent(board.id));
@@ -489,7 +559,8 @@ issue.onchange = () => {
   if (!active) return;
   active.issue = issue.value;
   if (active.task && active.issue && active.task.issue !== active.issue) active.task = undefined;
-  render(active);
+  if (active.view === 'tasks') render(active);
+  else void refresh(active);
 };
 element('clear-task').onclick = () => {
   if (active) {

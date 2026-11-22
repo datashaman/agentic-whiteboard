@@ -21,14 +21,15 @@ type entry struct {
 
 const matchingEntries = "SELECT id::text, payload, posted_at " + matchClause
 
-const matchClause = `
+const filterEntries = `
 	FROM entries
 	WHERE board = $1 AND live AND NOT EXISTS (
 		SELECT FROM jsonb_each($2::jsonb) AS pattern
 		WHERE entries.match_data -> pattern.key IS DISTINCT FROM pattern.value
 	)
-	ORDER BY id
 `
+
+const matchClause = filterEntries + " ORDER BY entries.id "
 
 func scanEntry(row pgx.Row) (entry, error) {
 	var result entry
@@ -50,19 +51,58 @@ func (a *api) browse(w http.ResponseWriter, r *http.Request, access boardAccess)
 		writeFailure(w, r, err)
 		return
 	}
-	rows, err := a.db.Query(r.Context(), matchingEntries, access.ID, pattern)
+	cursor, err := pageCursor(r)
 	if err != nil {
 		writeFailure(w, r, err)
 		return
 	}
-	entries, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (entry, error) { return scanEntry(row) })
+	fields, summary := listFields(r)
+	rows, err := a.db.Query(r.Context(),
+		"SELECT id::text, "+fields+", posted_at "+filterEntries+" AND id > $3 ORDER BY entries.id LIMIT $4",
+		access.ID, pattern, cursor, pageSize+1)
 	if err != nil {
 		writeFailure(w, r, err)
 		return
+	}
+	entries, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (entry, error) {
+		result, err := scanEntry(row)
+		if err == nil && summary {
+			result.Payload, err = decodeSummary(result.Payload)
+		}
+		return result, err
+	})
+	if err != nil {
+		writeFailure(w, r, err)
+		return
+	}
+	var next string
+	if len(entries) > pageSize {
+		entries = entries[:pageSize]
+		next = entries[pageSize-1].ID
 	}
 	writeJSON(w, http.StatusOK, struct {
-		Entries []entry `json:"entries"`
-	}{Entries: entries})
+		Entries    []entry `json:"entries"`
+		NextCursor string  `json:"nextCursor,omitempty"`
+	}{Entries: entries, NextCursor: next})
+}
+
+func (a *api) entryDetails(w http.ResponseWriter, r *http.Request, access boardAccess) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 || strconv.FormatInt(id, 10) != r.PathValue("id") {
+		writeError(w, http.StatusNotFound, "not_found", "entry not found on this board")
+		return
+	}
+	result, err := scanEntry(a.db.QueryRow(r.Context(),
+		"SELECT id::text, payload, posted_at FROM entries WHERE board = $1 AND id = $2", access.ID, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "not_found", "entry not found on this board")
+		return
+	}
+	if err != nil {
+		writeFailure(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func canonicalPattern(pattern json.RawMessage) (json.RawMessage, error) {
@@ -324,9 +364,7 @@ func waitForEntry(ctx context.Context, wait time.Duration, attempt func(context.
 	}
 	waitCtx, stop := context.WithTimeout(ctx, wait)
 	defer stop()
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-
+	delay := 50 * time.Millisecond
 	for waitCtx.Err() == nil {
 		attemptCtx, cancel := context.WithTimeout(waitCtx, 250*time.Millisecond)
 		result, err := attempt(attemptCtx)
@@ -335,10 +373,20 @@ func waitForEntry(ctx context.Context, wait time.Duration, attempt func(context.
 		if !errors.Is(err, pgx.ErrNoRows) && !shortTimeout {
 			return result, err
 		}
+		deadline, _ := waitCtx.Deadline()
+		remaining := time.Until(deadline)
+		if remaining <= 25*time.Millisecond {
+			<-waitCtx.Done()
+			break
+		}
+		// Leave time for one last check before the wait budget expires.
+		timer := time.NewTimer(min(delay, remaining-25*time.Millisecond))
 		select {
 		case <-waitCtx.Done():
-		case <-ticker.C:
+			timer.Stop()
+		case <-timer.C:
 		}
+		delay = min(delay*2, 500*time.Millisecond)
 	}
 	if err := ctx.Err(); err != nil {
 		return entry{}, err

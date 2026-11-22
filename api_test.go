@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -456,6 +457,51 @@ func TestCancellingPendingTakeLeavesLaterPostAvailable(t *testing.T) {
 	}
 }
 
+func TestInterruptedLookupReturnsRetryableError(t *testing.T) {
+	f := newAPIFixture(t)
+	_, token := f.token(t, "demo", "Worker", "take")
+	base, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	handler := newHandler(f.db, "")
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		handler.ServeHTTP(w, r)
+	}))
+	server.Config.BaseContext = func(net.Listener) context.Context { return base }
+	server.StartTLS()
+	defer server.Close()
+	f.server = server
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	pending := make(chan apiResponse, 1)
+	go func() {
+		pending <- f.request(ctx, "POST", "demo/take", token, "interrupted", `{"pattern":{},"waitMs":30000}`)
+	}()
+	select {
+	case <-started:
+		cancel()
+	case <-ctx.Done():
+		t.Fatal("the waiting request did not reach the server")
+	}
+	var response struct{ Code string }
+	(<-pending).want(t, 503, &response)
+	if response.Code != "request_interrupted" {
+		t.Fatalf("unexpected error: %q", response.Code)
+	}
+}
+
+func TestIdleLookupUsesBackoff(t *testing.T) {
+	attempts := 0
+	_, err := waitForEntry(context.Background(), time.Second, func(context.Context) (entry, error) {
+		attempts++
+		return entry{}, pgx.ErrNoRows
+	})
+	if !errors.Is(err, pgx.ErrNoRows) || attempts < 2 || attempts > 7 {
+		t.Fatalf("idle wait made %d attempts and returned %v", attempts, err)
+	}
+}
+
 type observedEvent struct {
 	ID, Operation, Actor string
 	At                   time.Time
@@ -470,6 +516,63 @@ func (f *apiFixture) history(t *testing.T, token string) []observedEvent {
 		t.Fatal("history should return a JSON array")
 	}
 	return response.Events
+}
+
+func TestPagedListsKeepFullEntryAvailable(t *testing.T) {
+	f := newAPIFixture(t)
+	_, token := f.token(t, "demo", "Reviewer", "post,read,take")
+	payload := `{"kind":"work","task":"demo","title":"Inspect \u0000","issue":9007199254740993,"private":"keep in full JSON"}`
+	original := f.post(t, token, "first", payload)
+	for i := 1; i <= pageSize; i++ {
+		f.post(t, token, fmt.Sprint(i), `{"kind":"work"}`)
+	}
+	var live struct {
+		Entries    []observedEntry
+		NextCursor string
+	}
+	f.call(t, "POST", "demo/browse?summary=1", token, "", `{"pattern":{"kind":"work"}}`, 200, &live)
+	if len(live.Entries) != pageSize || live.Entries[0].ID != original.ID ||
+		live.NextCursor == "" || strings.Contains(string(live.Entries[0].Payload), "private") {
+		t.Fatalf("unexpected summary page: %+v", live)
+	}
+	cursor := live.NextCursor
+	live.NextCursor = ""
+	f.call(t, "POST", "demo/browse?summary=1&cursor="+cursor, token, "", `{"pattern":{"kind":"work"}}`, 200, &live)
+	if len(live.Entries) != 1 || live.NextCursor != "" {
+		t.Fatalf("unexpected final summary page: %+v", live)
+	}
+
+	f.call(t, "POST", "demo/take", token, "take", `{"entryId":"`+original.ID+`"}`, 200, nil)
+	var recovered observedEntry
+	f.call(t, "GET", "demo/entries/"+original.ID, token, "", "", 200, &recovered)
+	if recovered.ID != original.ID || string(recovered.Payload) != payload {
+		t.Fatalf("full content changed: %+v", recovered)
+	}
+	var history struct {
+		Events     []observedEvent
+		NextCursor string
+	}
+	f.call(t, "GET", "demo/history", token, "", "", 200, &history)
+	if len(history.Events) != pageSize || history.Events[0].Operation != "take" || history.NextCursor == "" {
+		t.Fatalf("unexpected first history page: %+v", history)
+	}
+	cursor = history.NextCursor
+	history.NextCursor = ""
+	f.call(t, "GET", "demo/history?cursor="+cursor, token, "", "", 200, &history)
+	if len(history.Events) != 2 || history.Events[1].Entry.ID != original.ID || history.NextCursor != "" {
+		t.Fatalf("unexpected final history page: %+v", history)
+	}
+	f.call(t, "GET", "demo/history?entryId="+original.ID, token, "", "", 200, &history)
+	if len(history.Events) != 2 || history.Events[0].Entry.ID != original.ID {
+		t.Fatalf("unexpected history for entry: %+v", history)
+	}
+	f.call(t, "GET", "demo/history?cursor=0", token, "", "", 400, nil)
+
+	f.operator(t, "board", "create", "other", "Other board")
+	_, other := f.token(t, "other", "Other reader", "read")
+	f.call(t, "GET", "other/entries/"+original.ID, other, "", "", 404, nil)
+	_, writer := f.token(t, "demo", "Writer", "post")
+	f.call(t, "GET", "demo/entries/"+original.ID, writer, "", "", 403, nil)
 }
 
 func assertEvent(t *testing.T, event observedEvent, operation, actor string, expected observedEntry) {

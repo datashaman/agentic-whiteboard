@@ -1,6 +1,6 @@
 module github.com/datashaman/agentic-whiteboard
 
-go 1.25.0
+go 1.27.4
 
 require github.com/jackc/pgx/v5 v5.13.0
 

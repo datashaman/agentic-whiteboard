@@ -38,7 +38,7 @@ Use a fresh request ID and task ID to queue another item. Reuse the original req
 
 1. Pass the board URL and token through the agent runtime's configuration and secret storage. Grant **Take** to claim work, **Post** to publish results, and **Read** if the agent needs context or history.
 2. Send `POST /take` with a pattern for the jobs the agent handles. For example, match both `kind` and the workflow's `action`. Use `waitMs` for a bounded wait. HTTP 204 means the agent can start a fresh take when it is ready.
-3. Use the returned entry ID and payload to perform the work. If the agent needs context and has Read, `POST /read` returns one match and `POST /browse` lists matches.
+3. Use the returned entry ID and payload to perform the work. If the agent needs context and has Read, `POST /read` returns one match and `POST /browse` lists one page of matches. Pass its `nextCursor` as `?cursor=…` with the same pattern to get the next page.
 4. Send `POST /entries` with the result. Use the same `task` value and include the `issue` if the workflow reuses task IDs across issues. Use `kind: "result"` to advance the task card. A result can reference the taken entry by ID.
 
 See the [API reference](../README.md#connect-an-agent) for request shapes. Post and Take require an `Idempotency-Key`. If the reply is lost, retry with the same key and body. A client that resumes across process restarts should persist both before sending the request.

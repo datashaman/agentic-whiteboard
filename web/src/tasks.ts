@@ -7,7 +7,10 @@ export interface TaskRef {
   issue: string;
 }
 
-export type TaskIssues = ReadonlyMap<string, string | null>;
+export interface TaskIssues {
+  byTask: ReadonlyMap<string, string | null>;
+  byEntry: ReadonlyMap<string, TaskRef>;
+}
 
 interface TaskCard {
   ref: TaskRef;
@@ -74,24 +77,29 @@ function taskOf(payload: Payload): TaskRef | undefined {
   return { id: payload.task, issue: issueOf(payload) };
 }
 
-export function collectTaskIssues(entries: Entry[], events: BoardEvent[]): TaskIssues {
+export function collectTaskIssues(events: BoardEvent[]): TaskIssues {
   const issues = new Map<string, string | null>();
+  const work = new Map<string, TaskRef>();
   function track(entry: Entry) {
     if (entry.payload.kind !== 'work') return;
     const ref = taskOf(entry.payload);
     if (!ref) return;
     const previous = issues.get(ref.id);
     issues.set(ref.id, previous === undefined || previous === ref.issue ? ref.issue : null);
+    work.set(entry.id, ref);
   }
-  for (const entry of entries) track(entry);
   for (const { entry } of events) track(entry);
-  return issues;
+  return { byTask: issues, byEntry: work };
 }
 
 export function relatedIssue(payload: Payload, taskIssues: TaskIssues): string | null {
   const issue = issueOf(payload);
   if (issue || payload.kind === 'work' || typeof payload.task !== 'string') return issue;
-  const taskIssue = taskIssues.get(payload.task);
+  if (payload.kind === 'result' && typeof payload.sourceEntryId === 'string') {
+    const source = taskIssues.byEntry.get(payload.sourceEntryId);
+    if (source?.id === payload.task) return source.issue;
+  }
+  const taskIssue = taskIssues.byTask.get(payload.task);
   return taskIssue === undefined ? '' : taskIssue;
 }
 
@@ -103,34 +111,45 @@ function taskKey(ref: TaskRef): string {
   return JSON.stringify([ref.issue, ref.id]);
 }
 
-export function taskCards(entries: Entry[], events: BoardEvent[], taskIssues: TaskIssues): TaskCard[] {
+export function taskCards(events: BoardEvent[], taskIssues: TaskIssues): TaskCard[] {
   const liveWork = new Map<string, Entry>();
   const historicalWork = new Map<string, Entry>();
   const posts = new Map<string, PositionedEvent>();
   const takes = new Map<string, BoardEvent>();
-  const results = new Map<string, PositionedEvent>();
+  const legacyResults = new Map<string, PositionedEvent>();
+  const linkedResults = new Map<string, PositionedEvent>();
 
-  // Browse is oldest first. History is newest first, including within a timestamp.
-  for (const entry of entries) {
-    const ref = taskOf(entry.payload);
-    if (ref && entry.payload.kind === 'work') liveWork.set(taskKey(ref), entry);
+  for (const event of events) {
+    const { entry, operation } = event;
+    if (operation === 'take') takes.set(entry.id, event);
   }
+  // History is newest first, including within a timestamp.
   for (const [index, event] of events.entries()) {
     const { entry } = event;
-    if (event.operation === 'take') {
-      takes.set(entry.id, event);
-      continue;
-    }
+    if (event.operation === 'take') continue;
     posts.set(entry.id, { event, index });
     const ref = taskOf(entry.payload);
     if (!ref) continue;
     const key = taskKey(ref);
-    if (entry.payload.kind === 'work' && !historicalWork.has(key)) historicalWork.set(key, entry);
+    if (entry.payload.kind === 'work') {
+      if (!historicalWork.has(key)) historicalWork.set(key, entry);
+      const live = liveWork.get(key);
+      if (!takes.has(entry.id) && (!live || BigInt(entry.id) > BigInt(live.id))) liveWork.set(key, entry);
+    }
     if (entry.payload.kind === 'result') {
+      const source = entry.payload.sourceEntryId;
+      if (typeof source === 'string' && source) {
+        const work = taskIssues.byEntry.get(source);
+        const issue = issueOf(entry.payload);
+        if (work?.id === ref.id && (!issue || issue === work.issue) && !linkedResults.has(source)) {
+          linkedResults.set(source, { event, index });
+        }
+        continue;
+      }
       const issue = relatedIssue(entry.payload, taskIssues);
       if (issue === null) continue;
       const resultKey = taskKey({ id: ref.id, issue });
-      if (!results.has(resultKey)) results.set(resultKey, { event, index });
+      if (!legacyResults.has(resultKey)) legacyResults.set(resultKey, { event, index });
     }
   }
 
@@ -140,7 +159,9 @@ export function taskCards(entries: Entry[], events: BoardEvent[], taskIssues: Ta
     const ref = taskOf(entry.payload)!;
     const posted = posts.get(entry.id);
     const taken = takes.get(entry.id);
-    const result = results.get(key);
+    let result = linkedResults.get(entry.id);
+    const legacy = legacyResults.get(key);
+    if (legacy && (!result || legacy.index < result.index)) result = legacy;
 
     if (liveWork.has(key)) {
       cards.push({ ref, entry, lane: 'available', attribution: posted ? 'Posted by ' + posted.event.actor : 'Ready to take' });

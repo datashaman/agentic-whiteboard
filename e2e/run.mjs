@@ -35,8 +35,8 @@ function run(command, args, capture = false) {
   return result.stdout;
 }
 
-function issueToken(actor, permissions) {
-  const issued = JSON.parse(run(binary, ["token", "issue", board, actor, permissions], true));
+function issueToken(actor, permissions, target = board) {
+  const issued = JSON.parse(run(binary, ["token", "issue", target, actor, permissions], true));
   if (typeof issued?.token !== "string" || !issued.token) {
     throw new Error("The operator CLI did not return an access token.");
   }
@@ -51,6 +51,9 @@ try {
   const browserToken = issueToken("Maintainer", "read,post");
   const agentToken = issueToken("README Agent", "read,post,take");
   const observerToken = issueToken("Board observer", "read");
+  const pagingBoard = board + "-paging";
+  run(binary, ["board", "create", pagingBoard, "Paged whiteboard"]);
+  const pagingToken = issueToken("Maintainer", "read,post,take", pagingBoard);
 
   const socket = createServer().listen(0, "127.0.0.1");
   await once(socket, "listening");
@@ -77,6 +80,8 @@ try {
       WHITEBOARD_E2E_BROWSER_TOKEN: browserToken,
       WHITEBOARD_E2E_AGENT_TOKEN: agentToken,
       WHITEBOARD_E2E_OBSERVER_TOKEN: observerToken,
+      WHITEBOARD_E2E_PAGING_BOARD: pagingBoard,
+      WHITEBOARD_E2E_PAGING_TOKEN: pagingToken,
     },
   });
   const forwardSignal = (signal) => tests.kill(signal);

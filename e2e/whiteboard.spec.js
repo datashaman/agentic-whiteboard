@@ -161,6 +161,13 @@ test("a maintainer follows two tasks on one issue through agent handoff and reco
       await refresh();
       await expect(card("Taken", work.title)).toBeVisible();
 
+      await mutate("entries", { payload: {
+        kind: "result", task: work.task, issue: 42, sourceEntryId: original.id, title: "Late original result",
+      } }, 201);
+      await refresh();
+      await expect(card("Taken", work.title)).toBeVisible();
+      await expect(card("Result posted", work.title)).toHaveCount(0);
+
       await mutate("entries", result("42.0"), 201);
       await refresh();
       await expect(issue).toHaveValue(String(work.issue));
@@ -184,4 +191,92 @@ test("a maintainer follows two tasks on one issue through agent handoff and reco
   } finally {
     await agent.dispose();
   }
+});
+
+test("paged records load JSON on demand and a lost post reply survives reload", async ({ page }) => {
+  const path = "/boards/" + process.env.WHITEBOARD_E2E_PAGING_BOARD;
+  const api = "/api" + path;
+  const token = process.env.WHITEBOARD_E2E_PAGING_TOKEN;
+  const authorization = { Authorization: "Bearer " + token };
+  const button = (name) => page.getByRole("button", { name, exact: true });
+  async function connect() {
+    await page.getByLabel("Access token").fill(token);
+    await button("Connect").click();
+  }
+  async function post(payload) {
+    const response = await page.request.post(api + "/entries", {
+      headers: { ...authorization, "Idempotency-Key": randomUUID() },
+      data: { payload },
+    });
+    await expect(response).toBeOK();
+    return response.json();
+  }
+  const original = await post({ kind: "work", task: "older", issue: 8, title: "Older task", details: "Preserve full JSON" });
+  const take = await page.request.post(api + "/take", {
+    headers: { ...authorization, "Idempotency-Key": randomUUID() },
+    data: { entryId: original.id },
+  });
+  await expect(take).toBeOK();
+  for (let i = 1; i <= 51; i++) await post({ title: "Note " + i, details: "x".repeat(1024) });
+
+  const requests = [];
+  page.on("request", request => requests.push(new URL(request.url()).pathname));
+  await page.goto(path);
+  await connect();
+  await expect(page.getByRole("region", { name: "Taken", exact: true }).getByRole("button", { name: "Older task" })).toBeVisible();
+  expect(requests).toContain(api + "/overview");
+  expect(requests).not.toContain(api + "/history");
+  expect(requests).not.toContain(api + "/browse");
+
+  await button("Activity").click();
+  const activity = page.getByRole("region", { name: "Activity", exact: true });
+  await expect(activity.getByText("Note 51", { exact: true })).toBeVisible();
+  await expect(activity.getByText("Older task", { exact: true })).toHaveCount(0);
+  await button("Next page").click();
+  const record = activity.locator("details")
+    .filter({ has: page.getByText("took", { exact: true }) })
+    .filter({ has: page.getByText("Older task", { exact: true }) });
+  await expect(record).toBeVisible();
+  await page.getByLabel("Issue", { exact: true }).selectOption({ label: "#8" });
+  await expect(activity.getByText("Note 1", { exact: true })).toHaveCount(0);
+  await expect(record).toBeVisible();
+  expect(requests).not.toContain(api + "/entries/" + original.id);
+  await record.locator("summary").click();
+  await expect(record.getByLabel("Entry JSON")).toContainText("Preserve full JSON");
+  await record.getByRole("button", { name: "Repost" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Reposted entry" })).toBeVisible();
+
+  const route = "**" + api + "/entries";
+  await page.route(route, async request => {
+    const committed = await request.fetch();
+    expect(committed.status()).toBe(201);
+    await request.abort();
+  }, { times: 1 });
+  const payload = { kind: "note", title: "Retry note", retryTest: true };
+  async function submitRetryNote() {
+    await button("Post entry").click();
+    await page.getByLabel("JSON object").fill(JSON.stringify(payload));
+    await button("Post").click();
+  }
+  await submitRetryNote();
+  await expect(page.getByRole("dialog").getByRole("alert")).toHaveText(/fetch/i);
+  await page.reload();
+  await connect();
+  await submitRetryNote();
+  await expect(page.getByRole("status").filter({ hasText: "Posted entry" })).toBeVisible();
+  const matches = await page.request.post(api + "/browse", {
+    headers: authorization,
+    data: { pattern: { retryTest: true } },
+  });
+  await expect(matches).toBeOK();
+  expect((await matches.json()).entries).toHaveLength(1);
+
+  await button("Live entries").click();
+  const entries = page.getByRole("region", { name: "Live entries" });
+  await expect(entries.getByText("Note 1", { exact: true })).toBeVisible();
+  await expect(entries.getByText("Note 51", { exact: true })).toHaveCount(0);
+  await button("Next page").click();
+  await expect(entries.getByText("Note 51", { exact: true })).toBeVisible();
+  await button("Previous page").click();
+  await expect(entries.getByText("Note 1", { exact: true })).toBeVisible();
 });

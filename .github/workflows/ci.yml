@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: whiteboard_test
+          POSTGRES_USER: whiteboard
+          POSTGRES_PASSWORD: whiteboard
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U whiteboard -d whiteboard_test"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql://whiteboard:whiteboard@127.0.0.1:5432/whiteboard_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            e2e/package-lock.json
+      - name: Test API and worker against PostgreSQL
+        run: |
+          test -n "$TEST_DATABASE_URL"
+          go vet ./...
+          go test -race -count=1 ./...
+      - name: Install browser and file handoff dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone openssl
+          rclone version
+          openssl version
+          npm --prefix web ci
+          npm --prefix e2e ci
+          npm --prefix e2e exec -- playwright install --with-deps chromium
+      - name: Test browser and private file handoff
+        run: npm --prefix e2e test
+      - name: Validate Compose
+        env:
+          POSTGRES_PASSWORD: test
+          FILE_STORE_WORKER_PASSWORD: test
+          FILE_STORE_REVIEWER_PASSWORD: test
+        run: docker compose --profile worker config --quiet
