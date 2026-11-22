@@ -350,8 +350,7 @@ function renderRecords(session: Session) {
     list.append(node('p', 'empty', loading ? 'Loading entries…' : 'Entries unavailable'));
   } else if (current.view === 'activity') {
     const selected = focusedRecord?.id ?? openId;
-    const events = focusedRecord && !data.events.some(event => event.id === focusedRecord.id)
-      ? [focusedRecord, ...data.events] : data.events;
+    const events = session.view.activity;
     for (const event of events) {
       const action = event.operation === 'take' && has(session, 'post')
         ? () => button('Repost', control => void repost(session, event.entry.id, control))

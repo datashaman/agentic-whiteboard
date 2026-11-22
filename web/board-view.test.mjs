@@ -27,13 +27,16 @@ function viewWith(reader) {
 
 test('Refresh keeps the selected Activity page and focused record until navigation', async () => {
   const recent = event('10', entry('7', 'alpha'));
+  const unrelated = event('8', entry('5', 'beta'));
   const older = event('6', entry('3', 'alpha'));
   const focused = event('2', entry('1', 'beta'), 'take');
   const requests = [];
   const view = viewWith({ history: async (_signal, cursor, id) => {
     requests.push([cursor, id]);
     if (id) return { events: [focused] };
-    return cursor ? { events: [older] } : { events: [recent], nextCursor: recent.id };
+    if (cursor === recent.id) return { events: [unrelated], nextCursor: unrelated.id };
+    if (cursor === unrelated.id) return { events: [older] };
+    return { events: [recent], nextCursor: recent.id };
   } });
 
   view.select({ type: 'issue', issue: 'alpha' });
@@ -43,9 +46,10 @@ test('Refresh keeps the selected Activity page and focused record until navigati
   view.select({ type: 'focus', focus: { entryId: '1', operation: 'take' } });
   await view.refresh(silent);
   await view.refresh(silent);
-  assert.deepEqual(requests.slice(-2), [[recent.id, undefined], [undefined, '1']]);
+  assert.deepEqual(requests.slice(-3), [[recent.id, undefined], [undefined, '1'], [unrelated.id, undefined]]);
   assert.deepEqual(view.data.events, [older]);
   assert.equal(view.focusedRecord, focused);
+  assert.deepEqual(view.activity, [focused, older]);
 
   view.select({ type: 'page', direction: 'previous' });
   await view.refresh(silent);

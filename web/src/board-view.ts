@@ -63,6 +63,12 @@ export class BoardView {
     if (event && event.entry.id === focus?.entryId && event.operation === focus.operation) return event;
   }
 
+  get activity(): readonly BoardEvent[] {
+    const events = this.data?.events ?? [];
+    const focus = this.focusedRecord;
+    return focus && !events.some(event => event.id === focus.id) ? [focus, ...events] : events;
+  }
+
   can(permission: Permission) {
     return this.board.permissions.includes(permission) && (permission === 'read' || !this.board.archived);
   }
@@ -171,7 +177,7 @@ export class BoardView {
       signal.throwIfAborted();
       live = await this.reader.browse(pattern, signal, live.nextCursor);
     }
-    while (!focus && history?.nextCursor && !history.events.some(event => accepts(event.entry))) {
+    while (history?.nextCursor && !history.events.some(event => accepts(event.entry))) {
       signal.throwIfAborted();
       history = await this.reader.history(signal, history.nextCursor);
     }
