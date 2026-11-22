@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Agentic Whiteboard</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script type="module" src="/assets/app.js"></script>
+</head>
+<body>
+  <header class="masthead">
+    <div class="frame masthead-inner">
+      <div class="wordmark"><span class="board-mark" aria-hidden="true"></span> Agentic Whiteboard</div>
+      <div id="session" class="session" hidden>
+        <span id="actor"></span>
+        <button id="disconnect" type="button">Disconnect</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="frame">
+    <section id="login" class="login" aria-labelledby="login-title">
+      <div class="login-intro">
+        <p class="eyebrow">Board access</p>
+        <h1 id="login-title">Open a whiteboard</h1>
+        <p>Enter a board slug and the access token issued for that board.</p>
+      </div>
+      <form id="login-form" class="sheet stack">
+        <div class="stack field">
+          <label for="slug">Board slug</label>
+          <input id="slug" placeholder="demo" autocapitalize="none" spellcheck="false" required>
+        </div>
+        <div class="stack field">
+          <label for="token">Access token</label>
+          <input id="token" type="password" autocomplete="off" required>
+        </div>
+        <p id="login-error" class="error" role="alert" hidden></p>
+        <button type="submit" class="primary">Connect</button>
+      </form>
+    </section>
+
+    <div id="workspace" aria-labelledby="board-name" hidden>
+      <header class="board-head">
+        <div class="board-title">
+          <p class="eyebrow" id="board-path"></p>
+          <h1 id="board-name" tabindex="-1"></h1>
+        </div>
+        <div class="controls">
+          <button id="refresh" type="button"><span aria-hidden="true">↻</span> Refresh</button>
+          <button id="open-composer" type="button" class="primary" hidden><span aria-hidden="true">＋</span> Post entry</button>
+        </div>
+      </header>
+      <p id="board-status" class="notice" role="status" hidden></p>
+      <p id="board-error" class="notice error" role="alert" hidden></p>
+      <div id="view-bar" class="view-bar">
+        <nav aria-label="Whiteboard views">
+          <button type="button" data-view="tasks" aria-controls="tasks" aria-pressed="true">Tasks</button>
+          <button type="button" data-view="entries" aria-controls="entries" aria-pressed="false">Live entries</button>
+          <button type="button" data-view="activity" aria-controls="activity" aria-pressed="false">Activity</button>
+        </nav>
+        <div id="issue-filter" class="field issue-filter">
+          <label for="issue">Issue</label>
+          <select id="issue"><option value="">All issues</option></select>
+        </div>
+      </div>
+      <div id="tasks" class="lanes" role="region" aria-label="Tasks">
+        <section class="lane" data-lane="available" aria-labelledby="available-title">
+          <header><h2 id="available-title">Available</h2><span class="count" aria-label="0 tasks">0</span></header>
+          <div class="cards"></div>
+        </section>
+        <section class="lane" data-lane="taken" aria-labelledby="taken-title">
+          <header><h2 id="taken-title">Taken</h2><span class="count" aria-label="0 tasks">0</span></header>
+          <div class="cards"></div>
+        </section>
+        <section class="lane" data-lane="result" aria-labelledby="result-title">
+          <header><h2 id="result-title">Result posted</h2><span class="count" aria-label="0 tasks">0</span></header>
+          <div class="cards"></div>
+        </section>
+      </div>
+      <section id="entries" class="record-view" aria-label="Live entries" hidden>
+        <form id="browse-form" class="sheet query-form">
+          <div class="stack field">
+            <label for="pattern">Pattern</label>
+            <textarea id="pattern" rows="2" aria-describedby="pattern-hint" spellcheck="false">{}</textarea>
+            <p class="hint" id="pattern-hint">Match the specified JSON fields. Use <code>{}</code> for all entries.</p>
+          </div>
+          <button id="browse" type="submit">Browse</button>
+        </form>
+        <form id="take-form" class="sheet query-form" hidden>
+          <div class="stack field">
+            <label for="entry-id">Entry ID</label>
+            <input id="entry-id" required spellcheck="false">
+          </div>
+          <button type="submit">Take</button>
+        </form>
+        <div id="task-scope" class="scope" hidden>
+          <p>Task <code id="task-scope-id"></code></p>
+          <button id="clear-task" type="button">Clear task filter</button>
+        </div>
+        <div id="entry-list" class="list"></div>
+      </section>
+      <section id="activity" class="record-view" aria-label="Activity" hidden>
+        <div id="event-list" class="list"></div>
+      </section>
+      <p id="post-access" class="empty sheet" hidden>This access token can post entries. Read access is required to view tasks, live entries, and activity.</p>
+    </div>
+  </main>
+
+  <dialog id="composer" class="sheet" aria-labelledby="composer-title">
+    <form id="post-form" class="stack">
+      <div>
+        <h2 id="composer-title">Post entry</h2>
+        <p class="hint">Add any JSON object to this whiteboard.</p>
+      </div>
+      <div class="stack field">
+        <label for="payload">JSON object</label>
+        <textarea id="payload" rows="9" spellcheck="false" required autofocus>{}</textarea>
+      </div>
+      <p id="post-error" class="error" role="alert" hidden></p>
+      <div class="controls dialog-actions">
+        <button id="cancel-post" type="button">Cancel</button>
+        <button type="submit" class="primary">Post</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="taken-entry" class="sheet" aria-labelledby="taken-entry-title">
+    <form method="dialog" class="stack">
+      <div>
+        <h2 id="taken-entry-title">Entry taken</h2>
+        <p class="hint" id="taken-entry-id"></p>
+      </div>
+      <pre id="taken-payload" aria-label="Taken JSON"></pre>
+      <div class="controls dialog-actions"><button type="submit">Done</button></div>
+    </form>
+  </dialog>
+</body>
+</html>
