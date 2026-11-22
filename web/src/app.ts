@@ -95,6 +95,29 @@ const clockFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', ti
 
 let active: Session | undefined;
 
+type BoardConnection = { slug: string; token: string };
+const boardConnectionKey = 'whiteboard:board-connection';
+
+function savedConnection(): BoardConnection | undefined {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(boardConnectionKey) ?? 'null') as Partial<BoardConnection> | null;
+    if (typeof stored?.slug === 'string' && typeof stored.token === 'string' && stored.token) {
+      return { slug: stored.slug, token: stored.token };
+    }
+  } catch {
+    // The board can still be opened manually if tab storage is unavailable.
+  }
+}
+
+function saveConnection(connection?: BoardConnection) {
+  try {
+    if (connection) sessionStorage.setItem(boardConnectionKey, JSON.stringify(connection));
+    else sessionStorage.removeItem(boardConnectionKey);
+  } catch {
+    // A connected session can still work in memory.
+  }
+}
+
 function has(session: Session, permission: Permission) {
   return session.board.permissions.includes(permission) && (permission === 'read' || !session.board.archived);
 }
@@ -107,6 +130,7 @@ function announce(success = '', failure = '') {
 function disconnect(reason = '') {
   active?.refresh?.abort();
   active?.disclosure?.abort();
+  saveConnection();
   active = undefined;
   workspace.hidden = true;
   sessionBar.hidden = true;
@@ -550,15 +574,9 @@ try {
   message(loginError, 'Enter a valid board slug.');
 }
 
-loginForm.onsubmit = async event => {
-  event.preventDefault();
-  const slug = slugInput.value.trim();
-  const token = tokenInput.value.trim();
-  if (!slug || slug.includes('/') || slug === '.' || slug === '..' || !token) {
-    message(loginError, 'Enter a board slug and its access token.');
-    return;
-  }
+async function connect({ slug, token }: BoardConnection) {
   const submit = loginForm.querySelector<HTMLButtonElement>('button')!;
+  if (submit.disabled) return;
   submit.disabled = true;
   message(loginError);
   try {
@@ -571,6 +589,7 @@ loginForm.onsubmit = async event => {
       loaded: false, mutating: false,
     };
     history.replaceState(null, '', '/boards/' + encodeURIComponent(board.id));
+    saveConnection({ slug: board.id, token });
     tokenInput.value = '';
     boardName.textContent = board.name;
     document.title = board.name + ' · Agentic Whiteboard';
@@ -587,11 +606,29 @@ loginForm.onsubmit = async event => {
     render(session);
     boardName.focus();
   } catch (error) {
+    if (error instanceof APIError && error.status === 401) {
+      const saved = savedConnection();
+      if (saved?.slug === slug && saved.token === token) saveConnection();
+    }
     message(loginError, errorMessage(error));
   } finally {
     submit.disabled = false;
   }
+}
+
+loginForm.onsubmit = event => {
+  event.preventDefault();
+  const slug = slugInput.value.trim();
+  const token = tokenInput.value.trim();
+  if (!slug || slug.includes('/') || slug === '.' || slug === '..' || !token) {
+    message(loginError, 'Enter a board slug and its access token.');
+    return;
+  }
+  void connect({ slug, token });
 };
+
+const remembered = savedConnection();
+if (boardPath && remembered?.slug === slugInput.value) void connect(remembered);
 
 element('disconnect').onclick = () => disconnect();
 refreshButton.onclick = () => {
