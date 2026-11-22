@@ -186,8 +186,6 @@ test("a maintainer follows two tasks on one issue through agent handoff and reco
         Object.defineProperty(JSON, "rawJSON", { value: undefined });
       });
       await page.reload();
-      await page.getByLabel("Access token", { exact: true }).fill(process.env.WHITEBOARD_E2E_BROWSER_TOKEN);
-      await button("Connect").click();
       await expect(page.getByRole("heading", { name: "Whiteboard browser test", exact: true })).toBeVisible();
       await expect(page.getByRole("alert")).toHaveText(/exact JSON numbers/);
     });
@@ -268,7 +266,6 @@ test("paged records load JSON on demand and a lost post reply survives reload", 
   await submitRetryNote();
   await expect(page.getByRole("dialog").getByRole("alert")).toHaveText(/fetch/i);
   await page.reload();
-  await connect();
   await submitRetryNote();
   await expect(page.getByRole("status").filter({ hasText: "Posted entry" })).toBeVisible();
   const matches = await page.request.post(api + "/browse", {
@@ -286,6 +283,44 @@ test("paged records load JSON on demand and a lost post reply survives reload", 
   await expect(entries.getByText("Note 51", { exact: true })).toBeVisible();
   await button("Previous page").click();
   await expect(entries.getByText("Note 1", { exact: true })).toBeVisible();
+});
+
+test("a tab reconnects to the same board until the token is cleared", async ({ page }) => {
+  const button = name => page.getByRole("button", { name, exact: true });
+  const connect = button("Connect");
+  const disconnect = button("Disconnect");
+  const accessToken = page.getByLabel("Access token");
+  async function login() {
+    await accessToken.fill(process.env.WHITEBOARD_E2E_BROWSER_TOKEN);
+    await connect.click();
+    await expect(disconnect).toBeVisible();
+  }
+
+  await page.goto(boardPath);
+  await login();
+  await page.reload();
+  await expect(disconnect).toBeVisible();
+
+  await page.goto("/boards/" + process.env.WHITEBOARD_E2E_PAGING_BOARD);
+  await expect(connect).toBeEnabled();
+  await expect(accessToken).toHaveValue("");
+  await page.goto(boardPath);
+  await expect(disconnect).toBeVisible();
+
+  await disconnect.click();
+  await page.reload();
+  await expect(connect).toBeEnabled();
+  await expect(accessToken).toBeVisible();
+
+  await login();
+  await page.route("**" + apiPath, route => route.fulfill({
+    status: 401, json: { code: "unauthorized", message: "Access token rejected." },
+  }), { times: 1 });
+  await page.reload();
+  await expect(page.getByRole("alert")).toHaveText("Access token rejected.");
+  await page.reload();
+  await expect(connect).toBeEnabled();
+  await expect(accessToken).toBeVisible();
 });
 
 test("an expired post leaves live views and keeps its JSON in Activity", async ({ page }) => {

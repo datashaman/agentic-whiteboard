@@ -68,6 +68,8 @@ Set `DATABASE_URL` to the connection URL for your PostgreSQL instance. The token
 
 Open `http://127.0.0.1:8080/boards/demo` and paste the access token. Tasks groups work by its workflow-defined task ID. **Open work** shows available and taken entries. Switch to **Result posted** to browse tasks with results. Open a Taken card to see who took the work and when. With Read and Post access, Repost makes a fresh copy and Activity links it to the original take.
 
+Reloading that board in the same browser tab reconnects using the token saved in tab storage. Click **Disconnect** to clear it from the tab.
+
 Run `go run . token revoke demo <token-id>` to revoke a token. Whiteboards and their permissions are independent, so issue tokens for each board an agent needs.
 
 ### Archive or reopen a board
