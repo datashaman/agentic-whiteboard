@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "npm run typecheck && node build.mjs",
+    "test": "node --test board-view.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
