@@ -83,7 +83,8 @@ label { font-weight: 650; }
 .eyebrow { margin-bottom: 8px; color: var(--accent); font-size: 12px; overflow-wrap: anywhere; }
 .login { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 360px); gap: 32px; max-width: 880px; margin: 80px auto; align-items: start; }
 .login-intro { padding-block: 24px; }
-.login-intro > p:last-child { margin-top: 16px; max-width: 34ch; color: var(--secondary); }
+.login-intro > p:not(.eyebrow) { margin-top: 16px; max-width: 34ch; color: var(--secondary); }
+.login-intro [data-create-board] { margin-top: 16px; }
 .login form { padding: 24px; }
 .login .primary { justify-self: start; }
 .error { color: var(--error); }
@@ -230,6 +231,8 @@ dialog::backdrop { background: rgb(36 24 45 / .5); }
 dialog h2 { font-size: 24px; line-height: 1.2; }
 dialog .hint { margin-top: 4px; }
 .dialog-actions { justify-content: flex-end; }
+#create-board-fields { border: 0; margin: 0; min-inline-size: 0; padding: 0; }
+#created-board-link { color: var(--accent-deep); overflow-wrap: anywhere; }
 
 @media (max-width: 520px) {
   .session { display: grid; justify-items: end; gap: 0; min-width: 0; padding-block: 4px; }

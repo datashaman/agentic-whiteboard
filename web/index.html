@@ -25,6 +25,7 @@
         <p class="eyebrow">Board access</p>
         <h1 id="login-title">Open a whiteboard</h1>
         <p>Enter a board slug and the access token issued for that board.</p>
+        <button type="button" data-create-board>Create whiteboard</button>
       </div>
       <form id="login-form" class="sheet stack">
         <div class="stack field">
@@ -47,6 +48,7 @@
           <h1 id="board-name" tabindex="-1"></h1>
         </div>
         <div class="controls">
+          <button type="button" data-create-board>Create whiteboard</button>
           <button id="refresh" type="button"><span aria-hidden="true">↻</span> Refresh</button>
           <button id="open-composer" type="button" class="primary" hidden><span aria-hidden="true">＋</span> Post entry</button>
         </div>
@@ -115,6 +117,55 @@
       <p id="post-access" class="empty sheet" hidden>This access token can post entries. Read access is required to view tasks, live entries, and activity.</p>
     </div>
   </main>
+
+  <dialog id="create-board" class="sheet" aria-labelledby="create-board-title">
+    <div class="stack">
+      <h2 id="create-board-title" tabindex="-1">Create whiteboard</h2>
+      <form id="create-board-form" method="dialog" class="stack">
+        <fieldset id="create-board-fields" class="stack">
+          <div class="stack field">
+            <label for="create-board-server">Target server URL</label>
+            <input id="create-board-server" name="server" type="url" spellcheck="false" required autofocus>
+          </div>
+          <div class="stack field">
+            <label for="create-board-name">Whiteboard name</label>
+            <input id="create-board-name" name="name" maxlength="200" required>
+          </div>
+          <div class="stack field">
+            <label for="create-board-slug">URL slug</label>
+            <input id="create-board-slug" name="slug" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" maxlength="128" autocapitalize="none" spellcheck="false" required>
+          </div>
+          <div class="stack field">
+            <label for="create-board-actor">Your display name</label>
+            <input id="create-board-actor" name="actor" maxlength="200" required>
+          </div>
+          <div class="stack field">
+            <label for="create-board-key">Server creation token</label>
+            <input id="create-board-key" name="token" type="password" autocomplete="off" required>
+          </div>
+          <div class="controls dialog-actions">
+            <button id="cancel-create-board" type="button">Cancel</button>
+            <button type="submit" class="primary">Create</button>
+          </div>
+        </fieldset>
+        <p id="create-board-error" class="error" role="alert" hidden></p>
+      </form>
+      <div id="created-board" class="stack" hidden>
+        <p>Save the new board token to open your whiteboard.</p>
+        <div class="stack field">
+          <label for="created-board-token">New board token</label>
+          <input id="created-board-token" readonly spellcheck="false">
+          <p id="created-board-token-id" class="hint"></p>
+        </div>
+        <div class="controls">
+          <button id="copy-created-token" type="button">Copy token</button>
+          <a id="created-board-link" target="_blank" rel="noopener noreferrer">Open whiteboard</a>
+          <button id="done-create-board" type="button">Done</button>
+        </div>
+        <p id="created-board-status" class="hint" role="status"></p>
+      </div>
+    </div>
+  </dialog>
 
   <dialog id="composer" class="sheet" aria-labelledby="composer-title">
     <form id="post-form" class="stack">

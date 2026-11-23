@@ -29,9 +29,14 @@ type api struct {
 	db *pgxpool.Pool
 }
 
-func newHandler(db *pgxpool.Pool, webDir string) http.Handler {
+func newHandler(db *pgxpool.Pool, webDir string, creation *boardCreation) http.Handler {
 	a := &api{db: db}
 	mux := http.NewServeMux()
+	if creation != nil {
+		create := creation.handler(db)
+		mux.HandleFunc("POST /api/boards", create)
+		mux.HandleFunc("OPTIONS /api/boards", create)
+	}
 	mux.HandleFunc("GET /api/boards/{slug}", a.board)
 	mux.HandleFunc("GET /api/boards/{slug}/{$}", a.board)
 	mux.HandleFunc("POST /api/boards/{slug}/entries", a.withPermission("post", a.post))
@@ -111,13 +116,20 @@ func (access boardAccess) checkArchive(row pgx.Row) error {
 	return nil
 }
 
-func (a *api) authenticate(ctx context.Context, slug, authorization string) (boardAccess, error) {
-	var access boardAccess
+func bearerDigest(authorization string) ([32]byte, bool) {
 	header := strings.Fields(authorization)
 	if len(header) != 2 || !strings.EqualFold(header[0], "Bearer") {
+		return [32]byte{}, false
+	}
+	return sha256.Sum256([]byte(header[1])), true
+}
+
+func (a *api) authenticate(ctx context.Context, slug, authorization string) (boardAccess, error) {
+	var access boardAccess
+	digest, ok := bearerDigest(authorization)
+	if !ok {
 		return access, unauthorized
 	}
-	digest := sha256.Sum256([]byte(header[1]))
 	err := a.db.QueryRow(ctx, `
 		SELECT b.slug, b.name, t.actor, t.permissions, b.archived, t.id, b.archive_generation
 		FROM tokens t JOIN boards b ON b.slug = t.board

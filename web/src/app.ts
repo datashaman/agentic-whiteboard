@@ -1,5 +1,5 @@
 import {
-  APIError, BoardAPI, jsonObject,
+  APIError, BoardAPI, createBoard, jsonObject,
   type BoardEvent, type Entry, type Payload, type Permission,
 } from './api';
 import { BoardView, type ActivityFocus, type View, type ViewAction } from './board-view';
@@ -64,6 +64,16 @@ const taskFilters = Array.from(tasks.querySelectorAll<HTMLButtonElement>('[data-
 const lanes = Array.from(document.querySelectorAll<HTMLElement>('[data-lane]'));
 const entryList = element('entry-list');
 const eventList = element('event-list');
+const createBoardDialog = element<HTMLDialogElement>('create-board');
+const createBoardForm = element<HTMLFormElement>('create-board-form');
+const createBoardFields = element<HTMLFieldSetElement>('create-board-fields');
+const createBoardServer = element<HTMLInputElement>('create-board-server');
+const createBoardError = element('create-board-error');
+const createdBoard = element('created-board');
+const createdBoardToken = element<HTMLInputElement>('created-board-token');
+const createdBoardTokenId = element('created-board-token-id');
+const createdBoardLink = element<HTMLAnchorElement>('created-board-link');
+const createdBoardStatus = element('created-board-status');
 const newActivity = element<HTMLButtonElement>('new-activity');
 const activityStatus = element('activity-status');
 const pattern = element<HTMLTextAreaElement>('pattern');
@@ -115,6 +125,18 @@ function boardHref(slug: string, focus?: ActivityFocus) {
   const query = new URLSearchParams({ entry: focus.entryId });
   if (focus.operation) query.set('event', focus.operation);
   return path + '?' + query;
+}
+
+function serverOrigin(value: string) {
+  try {
+    const url = new URL(value);
+    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+    const supported = url.protocol === 'https:' || (url.protocol === 'http:' && loopback);
+    if (supported && url.href === url.origin + '/') return url.origin;
+  } catch {
+    // Use the same validation message for malformed and unsupported URLs.
+  }
+  throw new Error('Enter a server origin such as https://boards.example.com. Localhost may use HTTP.');
 }
 
 function recordLink(session: Session, label: string, focus: ActivityFocus) {
@@ -497,7 +519,7 @@ async function checkActivity(session: Session) {
   const signal = AbortSignal.any([check.signal, AbortSignal.timeout(10_000)]);
   try {
     const updated = await view.checkActivity(signal, () =>
-      !document.hidden && !session.mutating && !composer.open && !takenEntry.open &&
+      !document.hidden && !session.mutating && !createBoardDialog.open && !composer.open && !takenEntry.open &&
       !eventList.querySelector('details[open]') && !eventList.contains(document.activeElement));
     if (active !== session || signal.aborted) return;
     if (updated) render(session);
@@ -634,6 +656,65 @@ loginForm.onsubmit = event => {
 
 const remembered = savedConnection();
 if (boardPath && remembered?.slug === slugInput.value) void connect(remembered);
+
+createBoardServer.defaultValue = location.origin;
+for (const control of document.querySelectorAll<HTMLButtonElement>('[data-create-board]')) {
+  control.onclick = () => createBoardDialog.showModal();
+}
+element('cancel-create-board').onclick = () => createBoardDialog.close();
+element('done-create-board').onclick = () => createBoardDialog.close();
+createBoardDialog.oncancel = event => {
+  if (createBoardFields.disabled) event.preventDefault();
+};
+createBoardDialog.onclose = () => {
+  const server = createBoardServer.value;
+  createBoardForm.reset();
+  createBoardServer.value = server;
+  createBoardForm.hidden = false;
+  createdBoard.hidden = true;
+  createdBoardToken.value = '';
+  createdBoardTokenId.textContent = '';
+  createdBoardLink.removeAttribute('href');
+  createdBoardStatus.textContent = '';
+  message(createBoardError);
+};
+createBoardForm.onsubmit = async event => {
+  event.preventDefault();
+  if (createBoardFields.disabled) return;
+  const data = new FormData(createBoardForm);
+  const field = (name: string) => String(data.get(name) ?? '').trim();
+  const details = { slug: field('slug'), name: field('name'), actor: field('actor') };
+  createBoardFields.disabled = true;
+  message(createBoardError);
+  try {
+    if (!isSecureContext) throw new Error('Open this interface over HTTPS to create a whiteboard.');
+    const origin = serverOrigin(field('server'));
+    const created = await createBoard(origin, field('token'), details);
+    createBoardForm.reset();
+    createBoardServer.value = origin;
+    createdBoardToken.value = created.token;
+    createdBoardTokenId.textContent = 'Token ID ' + created.tokenId;
+    createdBoardLink.href = origin + boardHref(created.id);
+    createdBoardLink.textContent = 'Open whiteboard on ' + new URL(origin).host;
+    createBoardForm.hidden = true;
+    createdBoard.hidden = false;
+    element('create-board-title').focus();
+  } catch (error) {
+    message(createBoardError, errorMessage(error));
+  } finally {
+    createBoardFields.disabled = false;
+  }
+};
+element('copy-created-token').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(createdBoardToken.value);
+    createdBoardStatus.textContent = 'Token copied.';
+  } catch {
+    createdBoardToken.focus();
+    createdBoardToken.select();
+    createdBoardStatus.textContent = 'Copy the selected token.';
+  }
+};
 
 element('disconnect').onclick = () => disconnect();
 window.setInterval(() => {
