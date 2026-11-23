@@ -81,6 +81,47 @@ test('Entry links prefer the Take and event links keep their exact operation', a
   assert.equal(view.focusedRecord, posted);
 });
 
+test('Activity checks stay quiet until History changes and defer if reading starts during the update', async () => {
+  const recent = event('2', entry('2', 'alpha'));
+  const late = event('1', entry('1', 'alpha'));
+  const overviewStarted = deferred();
+  const overview = deferred();
+  let events = [recent];
+  let reads = 0;
+  const view = viewWith({
+    history: async () => ({ events }),
+    overview: async () => {
+      reads++;
+      if (reads === 2) {
+        overviewStarted.resolve();
+        return overview.promise;
+      }
+      return { issues: ['alpha'], events: [] };
+    },
+  });
+  const { signal } = new AbortController();
+  let idle = true;
+  const canApply = () => idle;
+  view.select({ type: 'view', view: 'activity' });
+  await view.refresh(silent);
+  assert.equal(await view.checkActivity(signal, canApply), false);
+  assert.equal(reads, 1);
+
+  events = [recent, late];
+  const pending = view.checkActivity(signal, canApply);
+  await overviewStarted.promise;
+  idle = false;
+  overview.resolve({ issues: ['alpha'], events: [] });
+  assert.equal(await pending, false);
+  assert.equal(view.hasNewActivity, true);
+  assert.deepEqual(view.activity, [recent]);
+
+  view.select({ type: 'latest-activity' });
+  await view.refresh(silent);
+  assert.equal(view.hasNewActivity, false);
+  assert.deepEqual(view.activity, [recent, late]);
+});
+
 test('a page failure retains matching results and applies archive status as soon as it arrives', async () => {
   const good = entry('2', 'alpha');
   const failedPage = deferred();

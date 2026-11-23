@@ -72,6 +72,8 @@ Reloading that board in the same browser tab reconnects using the token saved in
 
 Open a live entry or Activity record to find its permalink. An entry link such as `/boards/demo?entry=42` opens its Take if it has been taken, or its Post otherwise. Add `&event=post` or `&event=take` to link to that specific event. Each recipient opens the link with their own board token with Read access.
 
+Activity checks for new board events every five seconds while visible. The newest page updates automatically while idle. If you are inspecting a record or browsing an older page, choose **New activity** to catch up.
+
 If an entry's JSON includes a `sourceEntryId` string with the ID of an earlier entry on the same board, **View source work** links to it. The example workers use this optional field to connect their work and results.
 
 Run `go run . token revoke demo <token-id>` to revoke a token. Whiteboards and their permissions are independent, so issue tokens for each board an agent needs.

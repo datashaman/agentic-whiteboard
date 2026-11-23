@@ -10,6 +10,7 @@ export type ViewAction =
   | { type: 'pattern'; pattern: string }
   | { type: 'filter'; filter: TaskFilter }
   | { type: 'page'; direction: 'previous' | 'next' }
+  | { type: 'latest-activity' }
   | { type: 'focus'; focus: ActivityFocus };
 
 interface Selection {
@@ -29,9 +30,15 @@ interface ViewData {
   cards: ReturnType<typeof taskCards>;
   nextCursor?: string;
   focused?: BoardEvent;
+  activityHead?: string;
 }
 
 type BoardReader = Pick<BoardAPI, 'board' | 'browse' | 'history' | 'overview'>;
+type HistoryPage = Awaited<ReturnType<BoardReader['history']>>;
+
+function activityHead(page: HistoryPage) {
+  return page.events.map(event => event.id).join(',');
+}
 
 export class BoardView {
   private selection: Selection;
@@ -40,6 +47,8 @@ export class BoardView {
   private request?: AbortController;
   private access: Board;
   private issueOptions: string[] = [];
+  private activityHead?: string;
+  private activityPending = false;
 
   constructor(private readonly reader: BoardReader, board: Board) {
     this.access = board;
@@ -53,6 +62,7 @@ export class BoardView {
   get board(): Readonly<Board> { return this.access; }
   get issues(): readonly string[] { return this.issueOptions; }
   get loading() { return Boolean(this.request); }
+  get hasNewActivity() { return this.activityPending; }
   get data(): Readonly<ViewData> | undefined {
     return this.loaded?.scope === this.scope ? this.loaded.data : undefined;
   }
@@ -103,6 +113,10 @@ export class BoardView {
         this.selection = { ...current, pages, focus: undefined };
         break;
       }
+      case 'latest-activity':
+        if (!current.pages.length) return true;
+        this.selection = { ...current, pages: [] };
+        break;
       case 'focus':
         this.selection = {
           ...current, view: 'activity', task: undefined, focus: action.focus,
@@ -122,6 +136,27 @@ export class BoardView {
   cancel() {
     this.request?.abort();
     this.request = undefined;
+  }
+
+  async checkActivity(signal: AbortSignal, canApply: () => boolean): Promise<boolean> {
+    const selection = this.selection;
+    if (selection.view !== 'activity' || !this.data || this.loading || this.activityHead === undefined) return false;
+    const displayed = this.loaded;
+    const stillCurrent = () => !signal.aborted && this.selection === selection && this.loaded === displayed && !this.loading;
+    const canUpdate = () => !selection.pages.length && !this.activityPending && canApply();
+
+    const page = await this.reader.history(signal);
+    if (!stillCurrent() || activityHead(page) === this.activityHead) return false;
+    if (canUpdate()) {
+      const data = await this.load(selection, signal, page);
+      if (!stillCurrent()) return false;
+      if (canUpdate()) {
+        this.apply(this.scope, data);
+        return true;
+      }
+    }
+    this.activityPending = true;
+    return false;
   }
 
   async refresh(changed: () => void) {
@@ -147,10 +182,7 @@ export class BoardView {
       }
       if (access.status === 'rejected') throw access.reason;
       if (result.status === 'rejected') throw result.reason;
-      if (result.value) {
-        this.loaded = { scope, data: result.value };
-        this.issueOptions = result.value.issues;
-      }
+      if (result.value) this.apply(scope, result.value);
     } finally {
       if (this.request === request) {
         this.request = undefined;
@@ -159,13 +191,22 @@ export class BoardView {
     }
   }
 
-  private async load(selection: Readonly<Selection>, signal: AbortSignal): Promise<ViewData> {
+  private apply(scope: number, data: ViewData) {
+    this.loaded = { scope, data };
+    this.issueOptions = data.issues;
+    if (data.activityHead !== undefined) {
+      this.activityHead = data.activityHead;
+      this.activityPending = false;
+    }
+  }
+
+  private async load(selection: Readonly<Selection>, signal: AbortSignal, firstPage?: HistoryPage): Promise<ViewData> {
     const { view, pages, focus, issue, task, pattern } = selection;
     const cursor = pages.at(-1);
     const [overview, initialLive, initialHistory, focused] = await Promise.all([
       this.reader.overview(view === 'tasks', signal),
       view === 'entries' ? this.reader.browse(pattern, signal, cursor) : undefined,
-      view === 'activity' ? this.reader.history(signal, cursor) : undefined,
+      view === 'activity' ? firstPage ?? this.reader.history(signal, cursor) : undefined,
       focus ? this.reader.history(signal, undefined, focus.entryId) : undefined,
     ]);
     const taskIssues = collectTaskIssues(overview.events);
@@ -188,6 +229,7 @@ export class BoardView {
       events: history?.events.filter(event => accepts(event.entry)) ?? [],
       cards: view === 'tasks' ? taskCards(overview.events, taskIssues) : [],
       nextCursor: live?.nextCursor ?? history?.nextCursor,
+      activityHead: initialHistory && !cursor ? activityHead(initialHistory) : undefined,
       focused: focus?.operation
         ? entryEvents.find(event => event.operation === focus.operation)
         : entryEvents.find(event => event.operation === 'take') ?? entryEvents[0],

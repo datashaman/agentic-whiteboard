@@ -25,6 +25,7 @@
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 
 body {
   margin: 0;
@@ -156,6 +157,7 @@ nav button[aria-pressed=true] { border-block-end-color: var(--accent); color: va
 #post-access { margin-top: 20px; }
 
 .record-view { margin-top: 20px; }
+#new-activity { margin-bottom: 12px; }
 .query-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
