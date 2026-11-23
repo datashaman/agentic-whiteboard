@@ -76,7 +76,7 @@ func (f *apiFixture) start(t *testing.T, webDir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewTLSServer(newHandler(db, webDir))
+	server := httptest.NewTLSServer(newHandler(db, webDir, nil))
 	f.db, f.server = db, server
 	t.Cleanup(func() {
 		server.Close()
@@ -463,7 +463,7 @@ func TestInterruptedLookupReturnsRetryableError(t *testing.T) {
 	base, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	started := make(chan struct{})
-	handler := newHandler(f.db, "")
+	handler := newHandler(f.db, "", nil)
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(started)
 		handler.ServeHTTP(w, r)

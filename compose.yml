@@ -46,6 +46,8 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
       WHITEBOARD_ADDR: 0.0.0.0:8080
       WHITEBOARD_WEB_DIR: /var/www/whiteboard
+      WHITEBOARD_CREATE_TOKEN: ${WHITEBOARD_CREATE_TOKEN:-}
+      WHITEBOARD_CREATE_ORIGIN: ${WHITEBOARD_CREATE_ORIGIN:-}
     entrypoint: ["/bin/sh", "-ec"]
     command: ["whiteboard migrate && exec whiteboard serve"]
     ports:

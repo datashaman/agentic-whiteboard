@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -64,12 +64,10 @@ try {
   const liveAgentToken = issueToken("Activity agent", "post,take", liveBoard);
   const liveObserverToken = issueToken("Activity observer", "read", liveBoard);
 
-  const socket = createServer().listen(0, "127.0.0.1");
-  await once(socket, "listening");
-  const address = `127.0.0.1:${socket.address().port}`;
-  const closed = once(socket, "close");
-  socket.close();
-  await closed;
+  const sockets = [createServer().listen(0, "127.0.0.1"), createServer().listen(0, "127.0.0.1")];
+  await Promise.all(sockets.map(socket => once(socket, "listening")));
+  const [address, remote] = sockets.map(socket => `127.0.0.1:${socket.address().port}`);
+  await Promise.all(sockets.map(socket => new Promise(resolve => socket.close(resolve))));
 
   const require = createRequire(import.meta.url);
   const tests = spawn(process.execPath, [require.resolve("@playwright/test/cli"), "test"], {
@@ -85,6 +83,9 @@ try {
       WHITEBOARD_TLS_KEY: "",
       WHITEBOARD_E2E_EXECUTABLE: binary,
       WHITEBOARD_E2E_URL: `http://${address}`,
+      WHITEBOARD_E2E_REMOTE_URL: `http://${remote}`,
+      WHITEBOARD_E2E_CREATE_TOKEN: randomBytes(32).toString("hex"),
+      WHITEBOARD_E2E_REMOTE_CREATE_TOKEN: randomBytes(32).toString("hex"),
       WHITEBOARD_E2E_BOARD: board,
       WHITEBOARD_E2E_BROWSER_TOKEN: browserToken,
       WHITEBOARD_E2E_AGENT_TOKEN: agentToken,

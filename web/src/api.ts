@@ -54,9 +54,80 @@ export function jsonObject(input: string): string {
   return input.trim();
 }
 
+const requestKeys = new Map<string, string>();
+
+function saveRequestKey(operation: string, key?: string) {
+  if (key) requestKeys.set(operation, key);
+  else requestKeys.delete(operation);
+  try {
+    if (key) sessionStorage.setItem(operation, key);
+    else sessionStorage.removeItem(operation);
+  } catch {
+    // Storage can be disabled. In-page retries still reuse the key.
+  }
+}
+
+async function retryable<T>(identity: string[], send: (key: string) => Promise<T>): Promise<T> {
+  const input = new TextEncoder().encode(JSON.stringify(identity));
+  const digest = await crypto.subtle.digest('SHA-256', input);
+  const operation = 'whiteboard:request:' + Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  let key = requestKeys.get(operation);
+  try {
+    key ??= sessionStorage.getItem(operation) ?? undefined;
+  } catch {
+    // Keep the in-page key when tab storage is unavailable.
+  }
+  key ??= crypto.randomUUID();
+  saveRequestKey(operation, key);
+  try {
+    const result = await send(key);
+    saveRequestKey(operation);
+    return result;
+  } catch (error) {
+    // Only a confirmed response from the board resolves an uncertain outcome.
+    if (error instanceof APIError && error.code && error.status < 500) saveRequestKey(operation);
+    throw error;
+  }
+}
+
+async function decodeResponse<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    const fallback = response.status === 401 ? 'Access token is invalid.' : 'The whiteboard request failed.';
+    const error = await response.json().catch(() => ({})) as { code?: string; message?: string };
+    throw new APIError(response.status, error.code, error.message || fallback);
+  }
+  return parseExactJSON(
+    await response.text(),
+    'This browser cannot open whiteboards with exact JSON numbers. Update your browser and try again.',
+  ) as T;
+}
+
+export function createBoard(origin: string, token: string, details: { slug: string; name: string; actor: string }) {
+  const url = origin + '/api/boards';
+  const body = JSON.stringify(details);
+  return retryable([url, token, 'create', body], async key => {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json', 'Idempotency-Key': key },
+      body,
+      credentials: 'omit',
+      redirect: 'error',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(15_000),
+    }).catch(() => {
+      throw new Error('Could not reach the target server. Check its address and whether it allows creation from this site.');
+    });
+    const created = await decodeResponse<{ id: string; tokenId: string; token: string }>(response);
+    if (created?.id !== details.slug || typeof created.tokenId !== 'string' ||
+        typeof created.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(created.token)) {
+      throw new Error('The server did not return a whiteboard access token.');
+    }
+    return created;
+  });
+}
+
 export class BoardAPI {
   private readonly path: string;
-  private readonly requestKeys = new Map<string, string>();
 
   constructor(slug: string, private readonly token: string) {
     this.path = '/api/boards/' + encodeURIComponent(slug);
@@ -100,41 +171,8 @@ export class BoardAPI {
     return this.mutate('/entries/' + encodeURIComponent(entryId) + '/repost', '{}', 'recover:' + entryId);
   }
 
-  private async mutate(path: string, body: string, action: string) {
-    // Reuse the request ID when retrying a mutation with an unknown outcome.
-    const input = new TextEncoder().encode(JSON.stringify([this.path, this.token, action, body]));
-    const digest = await crypto.subtle.digest('SHA-256', input);
-    const operation = 'whiteboard:request:' + Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-    const key = this.pendingKey(operation) ?? crypto.randomUUID();
-    this.saveKey(operation, key);
-    try {
-      const entry = await this.request<Entry>(path, body, undefined, key);
-      this.saveKey(operation);
-      return entry;
-    } catch (error) {
-      // Only a confirmed response from the board resolves an uncertain outcome.
-      if (error instanceof APIError && error.code && error.status < 500) this.saveKey(operation);
-      throw error;
-    }
-  }
-
-  private pendingKey(operation: string) {
-    try {
-      return this.requestKeys.get(operation) ?? sessionStorage.getItem(operation);
-    } catch {
-      return this.requestKeys.get(operation);
-    }
-  }
-
-  private saveKey(operation: string, key?: string) {
-    if (key) this.requestKeys.set(operation, key);
-    else this.requestKeys.delete(operation);
-    try {
-      if (key) sessionStorage.setItem(operation, key);
-      else sessionStorage.removeItem(operation);
-    } catch {
-      // Storage can be disabled. In-page retries still reuse the key.
-    }
+  private mutate(path: string, body: string, action: string) {
+    return retryable([this.path, this.token, action, body], key => this.request<Entry>(path, body, undefined, key));
   }
 
   private async request<T>(path: string, body?: string, signal?: AbortSignal, requestKey?: string): Promise<T> {
@@ -148,14 +186,6 @@ export class BoardAPI {
       signal,
       cache: 'no-store',
     });
-    if (!response.ok) {
-      const fallback = response.status === 401 ? 'Access token is invalid.' : 'The whiteboard request failed.';
-      const error = await response.json().catch(() => ({})) as { code?: string; message?: string };
-      throw new APIError(response.status, error.code, error.message || fallback);
-    }
-    return parseExactJSON(
-      await response.text(),
-      'This browser cannot open whiteboards with exact JSON numbers. Update your browser and try again.',
-    ) as T;
+    return decodeResponse<T>(response);
   }
 }

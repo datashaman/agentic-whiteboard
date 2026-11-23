@@ -52,12 +52,16 @@ func serve(ctx context.Context, db *pgxpool.Pool) error {
 	if (cert == "") != (key == "") {
 		return errors.New("set both WHITEBOARD_TLS_CERT and WHITEBOARD_TLS_KEY to serve HTTPS")
 	}
+	creation, err := newBoardCreation(os.Getenv("WHITEBOARD_CREATE_TOKEN"), os.Getenv("WHITEBOARD_CREATE_ORIGIN"))
+	if err != nil {
+		return err
+	}
 	if err := db.Ping(ctx); err != nil {
 		return fmt.Errorf("connect to PostgreSQL: %w", err)
 	}
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           newHandler(db, os.Getenv("WHITEBOARD_WEB_DIR")),
+		Handler:           newHandler(db, os.Getenv("WHITEBOARD_WEB_DIR"), creation),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      45 * time.Second,
