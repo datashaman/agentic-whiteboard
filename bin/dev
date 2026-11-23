@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+
+cd "$(dirname "$0")/.."
+
+if ! command -v process-compose >/dev/null && command -v go >/dev/null; then
+    go_bin=$(go env GOBIN)
+    if [ -z "$go_bin" ]; then
+        go_bin=$(go env GOPATH)/bin
+    fi
+    export PATH="$go_bin:$PATH"
+fi
+if ! command -v process-compose >/dev/null; then
+    printf '%s\n' 'Install Process Compose v1.124.0 or later. See README.md.' >&2
+    exit 127
+fi
+
+if ! command -v postgres >/dev/null && command -v brew >/dev/null; then
+    export PATH="$(brew --prefix postgresql@18)/bin:$PATH"
+fi
+for program in postgres initdb pg_isready; do
+    if ! command -v "$program" >/dev/null; then
+        printf 'Add PostgreSQL binaries to PATH. Missing %s.\n' "$program" >&2
+        exit 127
+    fi
+done
+
+umask 077
+mkdir -p .dev
+chmod 700 .dev
+exec process-compose -U -u "$PWD/.dev/pc.sock" -L .dev/process-compose.log up "$@"

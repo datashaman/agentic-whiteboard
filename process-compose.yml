@@ -1,0 +1,93 @@
+ordered_shutdown: true
+
+environment:
+  - PGHOST=${PWD}/.dev
+  - PGPORT=5432
+  - DATABASE_URL=postgresql:///postgres?user=whiteboard&sslmode=disable
+  - WHITEBOARD_ADDR=127.0.0.1:${WHITEBOARD_DEV_PORT:-8080}
+  - WHITEBOARD_WEB_DIR=web/dist
+
+processes:
+  postgres:
+    command: |
+      set -eu
+      if [ ! -s .dev/postgres/PG_VERSION ]; then
+        initdb -D .dev/postgres -U whiteboard -A trust --no-locale -E UTF8
+      fi
+      exec postgres -D .dev/postgres -h '' -k "$$PGHOST" -p "$$PGPORT"
+    readiness_probe:
+      exec:
+        command: pg_isready -d "$$DATABASE_URL"
+      period_seconds: 1
+    shutdown:
+      signal: 2
+      parent_only: true
+
+  migrate:
+    command: go build -o .dev/whiteboard . && .dev/whiteboard migrate
+    depends_on:
+      postgres:
+        condition: process_healthy
+    watch:
+      cascade: true
+      paths:
+        - path: .
+          include: ["*.go", go.mod, go.sum, schema.sql]
+          exclude: ["*_test.go", .dev]
+
+  web-dependencies:
+    command: npm --prefix web ci
+
+  web:
+    command: npm --prefix web run build
+    depends_on:
+      web-dependencies:
+        condition: process_completed_successfully
+    watch:
+      paths:
+        - path: web
+          include: ["*.ts", "*.mjs", "*.html", "*.css", tsconfig.json]
+        - path: shared
+
+  whiteboard:
+    command: exec .dev/whiteboard serve
+    depends_on:
+      migrate:
+        condition: process_completed_successfully
+      web:
+        condition: process_completed_successfully
+    readiness_probe:
+      exec:
+        command: curl -fsS -o /dev/null "http://$$WHITEBOARD_ADDR/"
+      period_seconds: 1
+
+  uppercase-worker:
+    disabled: true
+    command: |
+      export BOARD_URL="$${BOARD_URL:-http://$$WHITEBOARD_ADDR/api/boards/demo}"
+      exec node examples/uppercase-worker.mjs
+
+  files-read:
+    disabled: true
+    command: |
+      : "$${FILE_DEMO_DIR:?Set FILE_DEMO_DIR to the prepared filestore directory}"
+      exec rclone serve webdav "$$FILE_DEMO_DIR/files" --config /dev/null \
+        --addr 127.0.0.1:8443 --read-only --min-tls-version tls1.2 \
+        --cert "$$FILE_DEMO_DIR/cert.pem" --key "$$FILE_DEMO_DIR/key.pem" --htpasswd "$$FILE_DEMO_DIR/reviewer"
+
+  files-write:
+    disabled: true
+    command: |
+      : "$${FILE_DEMO_DIR:?Set FILE_DEMO_DIR to the prepared filestore directory}"
+      exec rclone serve webdav "$$FILE_DEMO_DIR/files" --config /dev/null \
+        --addr 127.0.0.1:8444 --min-tls-version tls1.2 \
+        --cert "$$FILE_DEMO_DIR/cert.pem" --key "$$FILE_DEMO_DIR/key.pem" --htpasswd "$$FILE_DEMO_DIR/worker"
+
+  file-worker:
+    disabled: true
+    command: |
+      : "$${FILE_DEMO_DIR:?Set FILE_DEMO_DIR to the prepared filestore directory}"
+      export BOARD_URL="$${BOARD_URL:-http://$$WHITEBOARD_ADDR/api/boards/demo}"
+      export FILE_STORE_URL=https://127.0.0.1:8443/ FILE_STORE_WRITE_URL=https://127.0.0.1:8444/
+      export FILE_STORE_USER=worker NODE_EXTRA_CA_CERTS="$$FILE_DEMO_DIR/cert.pem"
+      exec node examples/file-worker.mjs

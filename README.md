@@ -6,7 +6,7 @@ A shared, Linda-style whiteboard for people and agents. Participants post JSON o
 
 ## Run with Docker Compose
 
-The [Compose stack](compose.yml) starts PostgreSQL, the whiteboard with its browser UI, and an authenticated rclone WebDAV filestore. It applies migrations and seeds the example transcript.
+The [Compose stack](docker-compose.yml) starts PostgreSQL, the whiteboard with its browser UI, and an authenticated rclone WebDAV filestore. It applies migrations and seeds the example transcript.
 
 Choose three passwords and replace the placeholders below. Run `openssl rand -hex 24` in your terminal for each password you want to generate. Keep the database password for subsequent starts.
 
@@ -46,6 +46,29 @@ curl --fail-with-body --cacert "$file_ca" --user reviewer '<report URL from Acti
 ```
 
 Opening the report in a browser requires trusting the local filestore certificate there. Both published ports bind to loopback. Set `WHITEBOARD_PORT` or `FILE_STORE_PORT` before starting to use different host ports, and use the selected filestore port in the posted transcript URL. `docker compose down` stops the stack and keeps the database, files, and certificate in named volumes.
+
+## Run the dev stack with Process Compose
+
+Install [Process Compose](https://f1bonacc1.github.io/process-compose/installation/) v1.124.0 or later. With Go installed, run `go install github.com/f1bonacc1/process-compose@v1.124.0`. The dev stack also uses PostgreSQL, Node.js 22 or later, and curl.
+
+```sh
+./bin/dev
+```
+
+The dashboard shows process status and logs. The runner starts a private PostgreSQL instance in `.dev/`, builds the web assets, applies migrations, and serves the UI at `http://127.0.0.1:8080`. Edits to Go sources or the schema rebuild and restart the server. Edits to web and shared sources rebuild the assets. Press **F10** to stop the stack. The development database persists between runs. Set `WHITEBOARD_DEV_PORT` before launching to use a different HTTP port.
+
+After the first startup, create a board and an access token from a second terminal in the repo. Use the token to open `/boards/demo`.
+
+```sh
+export PGHOST="$PWD/.dev" PGPORT=5432
+export DATABASE_URL='postgresql:///postgres?user=whiteboard&sslmode=disable'
+.dev/whiteboard board create demo 'Demo whiteboard'
+.dev/whiteboard token issue demo Maintainer post,read,take
+```
+
+For the [uppercase demo](docs/worker-integration.md#run-an-example-worker), set `BOARD_TOKEN` before launching the runner, then select `uppercase-worker` and press **F7** once a job is queued. The worker runs one job and exits. Set `BOARD_URL` to use a different board.
+
+For the [private file demo](docs/file-handoff.md#start-a-filestore), prepare `FILE_DEMO_DIR` through the `htpasswd` steps. Set `FILE_DEMO_DIR`, the worker's `BOARD_TOKEN`, and `FILE_STORE_PASSWORD` before launching the runner. Start `files-read` and `files-write` from the dashboard, then start `file-worker` when the listeners are up and a file job is queued.
 
 ## Run locally
 
