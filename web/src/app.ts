@@ -9,6 +9,7 @@ interface Session {
   api: BoardAPI;
   view: BoardView;
   disclosure?: AbortController;
+  activityCheck?: AbortController;
   mutating: boolean;
 }
 
@@ -63,6 +64,8 @@ const taskFilters = Array.from(tasks.querySelectorAll<HTMLButtonElement>('[data-
 const lanes = Array.from(document.querySelectorAll<HTMLElement>('[data-lane]'));
 const entryList = element('entry-list');
 const eventList = element('event-list');
+const newActivity = element<HTMLButtonElement>('new-activity');
+const activityStatus = element('activity-status');
 const pattern = element<HTMLTextAreaElement>('pattern');
 const composer = element<HTMLDialogElement>('composer');
 const postError = element('post-error');
@@ -130,6 +133,7 @@ function announce(success = '', failure = '') {
 function disconnect(reason = '') {
   active?.view.cancel();
   active?.disclosure?.abort();
+  active?.activityCheck?.abort();
   saveConnection();
   active = undefined;
   workspace.hidden = true;
@@ -139,6 +143,7 @@ function disconnect(reason = '') {
   takenEntry.close();
   entryList.replaceChildren();
   eventList.replaceChildren();
+  renderActivityNotice(false);
   for (const lane of lanes) lane.querySelector('.cards')!.replaceChildren();
   payloadEditor.value = '{}';
   expiryInput.value = '';
@@ -418,6 +423,12 @@ function renderRecords(session: Session) {
   if (restoreFocus) list.querySelector<HTMLElement>('details[open] > summary')?.focus();
 }
 
+function renderActivityNotice(available: boolean) {
+  if (newActivity.hidden === !available) return;
+  newActivity.hidden = !available;
+  activityStatus.textContent = available ? 'New activity is available.' : '';
+}
+
 function render(session: Session) {
   const { current, board, loading } = session.view;
   const read = has(session, 'read');
@@ -442,6 +453,8 @@ function render(session: Session) {
   postButton.hidden = !has(session, 'post');
   refreshButton.disabled = loading;
   browseButton.disabled = loading;
+  newActivity.disabled = loading;
+  renderActivityNotice(view === 'activity' && session.view.hasNewActivity);
   if (loading) workspace.setAttribute('aria-busy', 'true');
   else workspace.removeAttribute('aria-busy');
   refreshIssueOptions(session);
@@ -466,12 +479,33 @@ async function focusActivity(session: Session, focus: ActivityFocus) {
 }
 
 async function refresh(session: Session) {
+  session.activityCheck?.abort();
   try {
     await session.view.refresh(() => {
       if (active === session) render(session);
     });
   } catch (error) {
     report(session, error);
+  }
+}
+
+async function checkActivity(session: Session) {
+  const { view } = session;
+  if (document.hidden || view.current.view !== 'activity' || !has(session, 'read') || session.activityCheck) return;
+  const check = new AbortController();
+  session.activityCheck = check;
+  const signal = AbortSignal.any([check.signal, AbortSignal.timeout(10_000)]);
+  try {
+    const updated = await view.checkActivity(signal, () =>
+      !document.hidden && !session.mutating && !composer.open && !takenEntry.open &&
+      !eventList.querySelector('details[open]') && !eventList.contains(document.activeElement));
+    if (active !== session || signal.aborted) return;
+    if (updated) render(session);
+    else if (view.current.view === 'activity') renderActivityNotice(view.hasNewActivity);
+  } catch (error) {
+    if (!signal.aborted && error instanceof APIError && error.status === 401) report(session, error);
+  } finally {
+    session.activityCheck = undefined;
   }
 }
 
@@ -602,6 +636,27 @@ const remembered = savedConnection();
 if (boardPath && remembered?.slug === slugInput.value) void connect(remembered);
 
 element('disconnect').onclick = () => disconnect();
+window.setInterval(() => {
+  if (active) void checkActivity(active);
+}, 5_000);
+document.addEventListener('visibilitychange', () => {
+  if (!active) return;
+  if (document.hidden) active.activityCheck?.abort();
+  else void checkActivity(active);
+});
+newActivity.onclick = async () => {
+  if (!active) return;
+  const session = active;
+  await navigate(session, { type: 'latest-activity' });
+  if (active !== session || session.view.current.view !== 'activity' || document.activeElement !== document.body) return;
+  if (!newActivity.hidden) {
+    newActivity.focus();
+    return;
+  }
+  const record = eventList.querySelector<HTMLElement>('details[open] > summary')
+    ?? eventList.querySelector<HTMLElement>('details > summary');
+  (record ?? refreshButton).focus();
+};
 refreshButton.onclick = () => {
   if (!active) return;
   announce();

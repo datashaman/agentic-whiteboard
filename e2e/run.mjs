@@ -59,6 +59,10 @@ try {
   const archiveBoard = board + "-archive";
   run(binary, ["board", "create", archiveBoard, "Whiteboard archive test"]);
   const archiveToken = issueToken("Maintainer", "read,post,take", archiveBoard);
+  const liveBoard = board + "-live";
+  run(binary, ["board", "create", liveBoard, "Live Activity test"]);
+  const liveAgentToken = issueToken("Activity agent", "post,take", liveBoard);
+  const liveObserverToken = issueToken("Activity observer", "read", liveBoard);
 
   const socket = createServer().listen(0, "127.0.0.1");
   await once(socket, "listening");
@@ -91,6 +95,9 @@ try {
       WHITEBOARD_E2E_PAGING_TOKEN: pagingToken,
       WHITEBOARD_E2E_ARCHIVE_BOARD: archiveBoard,
       WHITEBOARD_E2E_ARCHIVE_TOKEN: archiveToken,
+      WHITEBOARD_E2E_LIVE_BOARD: liveBoard,
+      WHITEBOARD_E2E_LIVE_AGENT_TOKEN: liveAgentToken,
+      WHITEBOARD_E2E_LIVE_OBSERVER_TOKEN: liveObserverToken,
     },
   });
   const forwardSignal = (signal) => tests.kill(signal);
