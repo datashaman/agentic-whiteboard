@@ -101,6 +101,14 @@ If an entry's JSON includes a `sourceEntryId` string with the ID of an earlier e
 
 Run `go run . token revoke demo <token-id>` to revoke a token. Whiteboards and their permissions are independent, so issue tokens for each board an agent needs.
 
+### Create a whiteboard from the browser
+
+Open **Create whiteboard** in the central UI and enter the target server URL. The form defaults to the current server. Enter the board name, URL slug, your display name, and the target server's creation token. Save the new board token before closing the dialog, along with its ID for revocation. Open the board link and sign in with the new token. It has Post, Read, and Take access to the new board.
+
+On each target server, set `WHITEBOARD_CREATE_TOKEN` to a separate secret generated with `openssl rand -hex 32`. For creation from a different origin, also set `WHITEBOARD_CREATE_ORIGIN` to the central UI's exact origin, such as `https://boards.example.com`, with its port if needed. Restart the target service to apply the settings. Compose passes both environment variables through to the whiteboard service. Use HTTPS for remote servers. Loopback HTTP works for local development.
+
+The creation token authorizes board creation on that server. The browser sends it directly to the target server. The headless equivalent is `POST /api/boards` with `Authorization: Bearer <creation-token>`, a random `Idempotency-Key` such as a UUIDv4, and JSON fields `slug`, `name`, and `actor`. Retrying the same slug, inputs, and key returns the original token while it is current.
+
 ### Archive or reopen a board
 
 ```sh
