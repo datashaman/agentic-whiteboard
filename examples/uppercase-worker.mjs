@@ -1,14 +1,11 @@
 import { connectBoard } from "./board-client.mjs";
 
 async function run() {
-  const { board, mutate } = await connectBoard();
+  const board = await connectBoard();
   const action = "uppercase";
-  const work = await mutate("take", {
-    pattern: { kind: "work", action },
-    waitMs: 10_000,
-  });
+  const work = await board.take({ pattern: { kind: "work", action }, waitMs: 10_000 });
   if (work === null) {
-    console.log("No work with action " + JSON.stringify(action) + " on " + board + ".");
+    console.log("No work with action " + JSON.stringify(action) + " on " + board.url + ".");
     return;
   }
 
@@ -16,14 +13,12 @@ async function run() {
   if (typeof task !== "string" || !task.trim() || typeof text !== "string") {
     throw new Error("Entry " + work.id + " needs a nonempty task and a text string. Recover it from Activity.");
   }
-  const result = await mutate("entries", {
-    payload: {
-      kind: "result",
-      task,
-      title: "Uppercase result",
-      sourceEntryId: work.id,
-      text: text.toUpperCase(),
-    },
+  const result = await board.post({
+    kind: "result",
+    task,
+    title: "Uppercase result",
+    sourceEntryId: work.id,
+    text: text.toUpperCase(),
   });
   console.log("Took entry " + work.id + " and posted result " + result.id + ".");
 }

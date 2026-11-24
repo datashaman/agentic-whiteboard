@@ -17,7 +17,7 @@ function deferred() {
 
 function viewWith(reader) {
   return new BoardView({
-    board: async () => board,
+    details: async () => board,
     overview: async () => ({ issues: ['alpha', 'beta'], events: [] }),
     history: async () => ({ events: [] }),
     browse: async () => ({ entries: [] }),
@@ -31,7 +31,7 @@ test('Refresh keeps the selected Activity page and focused record until navigati
   const older = event('6', entry('3', 'alpha'));
   const focused = event('2', entry('1', 'beta'), 'take');
   const requests = [];
-  const view = viewWith({ history: async (_signal, cursor, id) => {
+  const view = viewWith({ history: async ({ cursor, entryId: id }) => {
     requests.push([cursor, id]);
     if (id) return { events: [focused] };
     if (cursor === recent.id) return { events: [unrelated], nextCursor: unrelated.id };
@@ -61,7 +61,7 @@ test('Entry links prefer the Take and event links keep their exact operation', a
   const posted = event('1', entry('1', 'alpha'));
   const taken = event('2', posted.entry, 'take');
   let events = [posted];
-  const view = viewWith({ history: async (_signal, _cursor, id) => ({ events: id === '1' ? events : [] }) });
+  const view = viewWith({ history: async ({ entryId: id }) => ({ events: id === '1' ? events : [] }) });
 
   view.select({ type: 'focus', focus: { entryId: '1' } });
   await view.refresh(silent);
@@ -128,8 +128,8 @@ test('a page failure retains matching results and applies archive status as soon
   const archiveSeen = deferred();
   let archived = false;
   const view = viewWith({
-    board: async () => ({ ...board, archived }),
-    browse: async (_pattern, _signal, cursor) => {
+    details: async () => ({ ...board, archived }),
+    browse: async (_pattern, { cursor }) => {
       if (!archived) return { entries: [good] };
       return cursor ? failedPage.promise : { entries: [entry('3', 'beta')], nextCursor: '3' };
     },

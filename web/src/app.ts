@@ -1,12 +1,12 @@
 import {
-  APIError, BoardAPI, createBoard, jsonObject,
+  APIError, Whiteboard, createBoard, jsonObject, sessionKeys,
   type BoardEvent, type Entry, type Payload, type Permission,
 } from './api';
 import { BoardView, type ActivityFocus, type View, type ViewAction } from './board-view';
 import { issueLabel, issueOf } from './tasks';
 
 interface Session {
-  api: BoardAPI;
+  api: Whiteboard;
   view: BoardView;
   disclosure?: AbortController;
   activityCheck?: AbortController;
@@ -379,7 +379,7 @@ function record(session: Session, entry: Entry, openId: string | undefined,
     const loading = node('p', '', 'Loading entry…');
     loading.setAttribute('role', 'status');
     body.replaceChildren(loading);
-    void session.api.entry(entry.id, load.signal).then(payload => {
+    void session.api.entry(entry.id, { signal: load.signal }).then(payload => {
       if (load.signal.aborted || !details.open) return;
       full = payload;
       showPayload(payload);
@@ -548,7 +548,7 @@ async function take(session: Session, entryId: string, control: HTMLButtonElemen
   await mutate(session, control, async () => {
     let entry: Entry;
     try {
-      entry = await session.api.take(entryId);
+      entry = (await session.api.take({ entryId }))!;
     } catch (error) {
       if (active !== session) return;
       if (error instanceof APIError && error.code === 'already_taken' && has(session, 'read')) {
@@ -598,8 +598,8 @@ async function connect({ slug, token }: BoardConnection) {
   submit.disabled = true;
   message(loginError);
   try {
-    const api = new BoardAPI(slug, token);
-    const board = await api.board();
+    const api = new Whiteboard('/api/boards/' + encodeURIComponent(slug), token, { keys: sessionKeys });
+    const board = await api.details();
     const session: Session = { api, view: new BoardView(api, board), mutating: false };
     const query = new URLSearchParams(urlBoardSlug === board.id ? location.search : '');
     let focus: ActivityFocus | undefined;
@@ -689,7 +689,7 @@ createBoardForm.onsubmit = async event => {
   try {
     if (!isSecureContext) throw new Error('Open this interface over HTTPS to create a whiteboard.');
     const origin = serverOrigin(field('server'));
-    const created = await createBoard(origin, field('token'), details);
+    const created = await createBoard(origin, field('token'), details, { keys: sessionKeys });
     createBoardForm.reset();
     createBoardServer.value = origin;
     createdBoardToken.value = created.token;
@@ -804,7 +804,7 @@ element<HTMLFormElement>('post-form').onsubmit = async event => {
     message(postError);
     try {
       const expiresAt = expiryInput.value ? new Date(expiryInput.value).toISOString() : undefined;
-      const entry = await session.api.post(jsonObject(payloadEditor.value), expiresAt);
+      const entry = await session.api.post(jsonObject(payloadEditor.value), { expiresAt, action: 'post' });
       if (active !== session) return;
       payloadEditor.value = '{}';
       expiryInput.value = '';

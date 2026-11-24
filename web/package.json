@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "npm run typecheck && node build.mjs",
-    "test": "node --test board-view.test.mjs",
+    "test": "node --test board-view.test.mjs ../shared/whiteboard.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

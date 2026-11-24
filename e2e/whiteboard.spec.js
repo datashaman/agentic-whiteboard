@@ -254,11 +254,12 @@ test("paged records load JSON on demand and a lost post reply survives reload", 
   await expect(activity.getByRole("button", { name: "View original take (entry " + original.id + ")" })).toBeVisible();
 
   const route = "**" + api + "/entries";
+  // The client resends a lost reply once, so lose both replies.
   await page.route(route, async request => {
     const committed = await request.fetch();
-    expect(committed.status()).toBe(201);
+    expect(committed.ok()).toBe(true);
     await request.abort();
-  }, { times: 1 });
+  }, { times: 2 });
   const payload = { kind: "note", title: "Retry note", retryTest: true };
   async function submitRetryNote() {
     await button("Post entry").click();
@@ -266,7 +267,7 @@ test("paged records load JSON on demand and a lost post reply survives reload", 
     await button("Post").click();
   }
   await submitRetryNote();
-  await expect(page.getByRole("dialog").getByRole("alert")).toHaveText(/fetch/i);
+  await expect(page.getByRole("dialog").getByRole("alert")).toHaveText(/could not confirm/i);
   await page.reload();
   await submitRetryNote();
   await expect(page.getByRole("status").filter({ hasText: "Posted entry" })).toBeVisible();
