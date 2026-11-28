@@ -37,11 +37,11 @@ try {
     return response;
   }
 
-  const { board, mutate } = await connectBoard();
+  const board = await connectBoard();
   const action = "uppercase-file";
-  const work = await mutate("take", { pattern: { kind: "work", action }, waitMs: 10_000 });
+  const work = await board.take({ pattern: { kind: "work", action }, waitMs: 10_000 });
   if (work === null) {
-    console.log("No work with action " + JSON.stringify(action) + " on " + board + ".");
+    console.log("No work with action " + JSON.stringify(action) + " on " + board.url + ".");
   } else {
     workID = work.id;
     const { task, document } = work.payload;
@@ -67,10 +67,10 @@ try {
     const upload = await fileRequest(report, "PUT", text.toUpperCase());
     await upload.body?.cancel();
 
-    const result = await mutate("entries", { payload: {
+    const result = await board.post({
       kind: "result", task, title: "Uppercase file result", sourceEntryId: workID,
       report: { uri: report.href },
-    } });
+    });
     console.log("Took entry " + workID + " and posted result " + result.id + ".");
   }
 } catch (error) {

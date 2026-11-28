@@ -99,6 +99,8 @@ With Compose, use `docker compose exec whiteboard whiteboard board archive demo`
 
 See the [worker integration guide](docs/worker-integration.md) to run the example worker or connect an agent from your own runtime. Give each agent the board API URL and its own token.
 
+JavaScript agents can use the [SDK](shared/whiteboard.mjs) in Node.js 22 or later or a browser bundle. It manages idempotency keys, resends a lost reply once, extends timeouts for long-polls, and keeps JSON numbers exact. [Types](shared/whiteboard.d.mts) ship alongside it. Other languages call the HTTP API below.
+
 The [draft-and-review demo](docs/worker-integration.md#run-a-draft-and-review-handoff) shows two separate workers handing off work and how to recover when one stops after Take.
 
 The [private file handoff](docs/file-handoff.md) shows a worker sharing file references through the board and opening them with separate filestore credentials.
@@ -115,6 +117,7 @@ The service uses HTTPS when `WHITEBOARD_TLS_CERT` and `WHITEBOARD_TLS_KEY` point
 | History | `GET /history` | Read |
 | Inspect an entry | `GET /entries/{id}`, including entries already taken | Read |
 | Repost a taken entry | `POST /entries/{id}/repost` with `{}` and an `Idempotency-Key` | Read and Post |
+| Overview | `GET /overview`, with `tasks=1` for the Tasks view | Read |
 
 Patterns match the specified top-level fields by JSON value. An empty pattern matches all live entries. Read and Take pick the oldest match and return HTTP 204 when a pattern has no match after the requested wait. Post and Take require an idempotency key. Use a fresh key for each new operation and reuse it when retrying that operation.
 
@@ -137,6 +140,7 @@ Install rclone and OpenSSL to include the private-file browser test.
 ```sh
 go test -race ./...
 npm --prefix web ci
+npm --prefix web test
 npm --prefix e2e ci
 npm --prefix e2e exec -- playwright install chromium
 npm --prefix e2e test

@@ -1,4 +1,4 @@
-import { APIError, type Board, type BoardAPI, type BoardEvent, type Entry, type Permission } from './api';
+import { APIError, type Board, type Whiteboard, type BoardEvent, type Entry, type Permission } from './api';
 import { collectTaskIssues, issueOf, matchesTask, relatedIssue, taskCards, type TaskRef } from './tasks';
 
 export type View = 'tasks' | 'entries' | 'activity';
@@ -33,7 +33,7 @@ interface ViewData {
   activityHead?: string;
 }
 
-type BoardReader = Pick<BoardAPI, 'board' | 'browse' | 'history' | 'overview'>;
+type BoardReader = Pick<Whiteboard, 'details' | 'browse' | 'history' | 'overview'>;
 type HistoryPage = Awaited<ReturnType<BoardReader['history']>>;
 
 function activityHead(page: HistoryPage) {
@@ -145,7 +145,7 @@ export class BoardView {
     const stillCurrent = () => !signal.aborted && this.selection === selection && this.loaded === displayed && !this.loading;
     const canUpdate = () => !selection.pages.length && !this.activityPending && canApply();
 
-    const page = await this.reader.history(signal);
+    const page = await this.reader.history({ summary: true, signal });
     if (!stillCurrent() || activityHead(page) === this.activityHead) return false;
     if (canUpdate()) {
       const data = await this.load(selection, signal, page);
@@ -168,7 +168,7 @@ export class BoardView {
     const selection = this.selection;
     changed();
     try {
-      const board = this.reader.board(signal).then(access => {
+      const board = this.reader.details({ signal }).then(access => {
         if (signal.aborted) return;
         const archived = this.board.archived;
         this.access = access;
@@ -204,10 +204,10 @@ export class BoardView {
     const { view, pages, focus, issue, task, pattern } = selection;
     const cursor = pages.at(-1);
     const [overview, initialLive, initialHistory, focused] = await Promise.all([
-      this.reader.overview(view === 'tasks', signal),
-      view === 'entries' ? this.reader.browse(pattern, signal, cursor) : undefined,
-      view === 'activity' ? firstPage ?? this.reader.history(signal, cursor) : undefined,
-      focus ? this.reader.history(signal, undefined, focus.entryId) : undefined,
+      this.reader.overview({ tasks: view === 'tasks', signal }),
+      view === 'entries' ? this.reader.browse(pattern, { cursor, summary: true, signal }) : undefined,
+      view === 'activity' ? firstPage ?? this.reader.history({ cursor, summary: true, signal }) : undefined,
+      focus ? this.reader.history({ entryId: focus.entryId, summary: true, signal }) : undefined,
     ]);
     const taskIssues = collectTaskIssues(overview.events);
     const accepts = ({ payload }: Entry) =>
@@ -216,11 +216,11 @@ export class BoardView {
     let history = initialHistory;
     while (live?.nextCursor && !live.entries.some(accepts)) {
       signal.throwIfAborted();
-      live = await this.reader.browse(pattern, signal, live.nextCursor);
+      live = await this.reader.browse(pattern, { cursor: live.nextCursor, summary: true, signal });
     }
     while (history?.nextCursor && !history.events.some(event => accepts(event.entry))) {
       signal.throwIfAborted();
-      history = await this.reader.history(signal, history.nextCursor);
+      history = await this.reader.history({ cursor: history.nextCursor, summary: true, signal });
     }
     const entryEvents = focused?.events ?? [];
     return {

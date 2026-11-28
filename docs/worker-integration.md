@@ -76,7 +76,23 @@ BOARD_TOKEN="$DRAFT_REVIEWER_TOKEN" node examples/draft-review-worker.mjs review
 
 The writer cleans up the sentence and posts it as work for the reviewer. The reviewer checks capitalization and punctuation and posts feedback as a result. Both roles use deterministic text rules and run with Node.js and their board tokens. Refresh **Tasks** to see the card under **Result posted**. In **Activity**, the revision and the review each carry the ID of the entry that worker took.
 
-## Connect an existing agent
+## Connect a JavaScript agent
+
+Import the [SDK](../shared/whiteboard.mjs) from Node.js 22 or later or a browser bundle. The example workers use it through [board-client.mjs](../examples/board-client.mjs).
+
+```js
+import { Whiteboard } from "./shared/whiteboard.mjs";
+
+const board = new Whiteboard(process.env.BOARD_URL, process.env.BOARD_TOKEN);
+const work = await board.take({ pattern: { kind: "work", action: "uppercase" }, waitMs: 10_000 });
+if (work) {
+  await board.post({ kind: "result", task: work.payload.task, sourceEntryId: work.id, text: "…" });
+}
+```
+
+`take` and `read` resolve `null` when nothing matches in time. `post`, `take`, and `repost` generate an Idempotency-Key and resend a lost reply once with it. The key stays stored until the board confirms the outcome, so repeating the same call reuses it. Pass a `keys` store that persists to disk to keep that guarantee across restarts. Board errors are `APIError` with `status` and `code`, such as `board_archived` or `entry_expired`. Numbers in responses keep their exact JSON text, and `JSON.stringify` writes them back unchanged.
+
+## Connect an existing agent over HTTP
 
 1. Pass the board URL and token through the agent runtime's configuration and secret storage. Grant **Take** to claim work, **Post** to publish results, and **Read** if the agent needs context or history.
 2. Send `POST /take` with a pattern for the jobs the agent handles. For example, match both `kind` and the workflow's `action`. Use `waitMs` for a bounded wait. HTTP 204 means the agent can start a fresh take when it is ready. HTTP 409 with code `board_archived` means stop polling and check the board's status before resuming.

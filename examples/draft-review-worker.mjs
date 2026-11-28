@@ -8,10 +8,10 @@ async function run() {
 
   const writing = role === "writer";
   const action = writing ? "revise-draft" : "review-draft";
-  const { board, mutate } = await connectBoard();
-  const work = await mutate("take", { pattern: { kind: "work", action }, waitMs: 10_000 });
+  const board = await connectBoard();
+  const work = await board.take({ pattern: { kind: "work", action }, waitMs: 10_000 });
   if (!work) {
-    console.log("No work with action " + JSON.stringify(action) + " on " + board + ".");
+    console.log("No work with action " + JSON.stringify(action) + " on " + board.url + ".");
     return;
   }
   if (option) {
@@ -38,7 +38,7 @@ async function run() {
     if (!feedback.length) feedback.push("The draft starts with a capital letter and ends with punctuation.");
     payload = { ...source, kind: "result", title: "Draft review", feedback };
   }
-  const output = await mutate("entries", { payload });
+  const output = await board.post(payload);
   console.log("Took entry " + work.id + " and posted " + payload.title + " as entry " + output.id + ".");
 }
 
